@@ -270,3 +270,39 @@ extension Array where Element == Int {
         return filter { (1...65535).contains($0) && seen.insert($0).inserted }
     }
 }
+
+// MARK: - Rechecking hosts we already know about
+
+extension LANScanner {
+    /// Knock on exactly the endpoints of hosts already imported.
+    ///
+    /// This is what the Hosts tab's "Re-scan" does, and it is deliberately not
+    /// a subnet sweep: the question there is "are the machines I kept awake?",
+    /// which is `localHosts.count` probes rather than thousands.
+    static func recheck(
+        _ hosts: [Host],
+        timeout: TimeInterval = TCPProbe.defaultTimeout
+    ) async -> Set<UUID> {
+        guard !hosts.isEmpty else { return [] }
+        var reachable: Set<UUID> = []
+
+        await withTaskGroup(of: (UUID, Bool).self) { group in
+            for host in hosts {
+                group.addTask {
+                    let open = await TCPProbe.probe(
+                        address: host.hostname,
+                        port: host.port,
+                        timeout: timeout,
+                        readBanner: false
+                    )
+                    return (host.id, open != nil)
+                }
+            }
+            while let (id, open) = await group.next() {
+                if open { reachable.insert(id) }
+            }
+        }
+
+        return reachable
+    }
+}

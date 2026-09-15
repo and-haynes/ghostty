@@ -9,6 +9,8 @@ struct HostsView: View {
     @State private var editing: Host?
     @State private var showingNew = false
     @State private var errorMessage: String?
+    @State private var rechecking = false
+    @State private var unreachable: Set<UUID> = []
 
     var body: some View {
         NavigationStack {
@@ -52,12 +54,17 @@ struct HostsView: View {
     private var list: some View {
         List {
             ForEach(groups, id: \.name) { group in
-                Section(group.name) {
+                Section {
                     ForEach(group.hosts) { host in
                         Button {
                             connect(host)
                         } label: {
-                            HostRow(host: host, identity: vault.identity(withID: host.identityID))
+                            HostRow(
+                                host: host,
+                                identity: vault.identity(withID: host.identityID),
+                                showsLastSeen: group.name == Host.localGroup,
+                                isUnreachable: unreachable.contains(host.id)
+                            )
                         }
                         .buttonStyle(.plain)
                         .swipeActions(edge: .trailing) {
@@ -72,8 +79,49 @@ struct HostsView: View {
                                 .tint(.blue)
                         }
                     }
+                } header: {
+                    if group.name == Host.localGroup {
+                        localHeader(count: group.hosts.count)
+                    } else {
+                        Text(group.name)
+                    }
                 }
             }
+        }
+    }
+
+    /// The Local group is the one whose membership can go stale — these hosts
+    /// were found by a sweep rather than typed in, and a machine that has been
+    /// switched off looks identical to one that was never there. Hence a
+    /// re-scan in the header and a last-seen on every row.
+    private func localHeader(count: Int) -> some View {
+        HStack {
+            Label("Local", systemImage: "antenna.radiowaves.left.and.right")
+            Spacer()
+            if rechecking {
+                ProgressView().controlSize(.mini)
+            } else {
+                Button("Re-scan") { recheckLocal() }
+                    .font(.caption.weight(.semibold))
+                    .textCase(nil)
+                    .disabled(count == 0)
+            }
+        }
+    }
+
+    /// Knock on exactly these hosts rather than sweeping the subnet again:
+    /// the question here is "which of the machines I kept are awake?".
+    private func recheckLocal() {
+        let local = vault.localHosts
+        guard !local.isEmpty else { return }
+        rechecking = true
+        Haptics.shared.fire(.listAction)
+        Task {
+            let reachable = await LANScanner.recheck(local)
+            for host in local where reachable.contains(host.id) { vault.markSeen(host) }
+            unreachable = Set(local.map(\.id)).subtracting(reachable)
+            rechecking = false
+            Haptics.shared.fire(reachable.isEmpty ? .syncFailed : .syncSucceeded)
         }
     }
 
@@ -88,10 +136,19 @@ struct HostsView: View {
         }
     }
 
+    /// Alphabetical, except that the Local group always sits last: it is the
+    /// machine-generated one and can be long, and a sweep of the subnet should
+    /// not push the hosts someone configured by hand off the screen.
     private var groups: [(name: String, hosts: [Host])] {
         Dictionary(grouping: filtered, by: { $0.group.isEmpty ? "Ungrouped" : $0.group })
             .map { (name: $0.key, hosts: $0.value.sorted { $0.displayName < $1.displayName }) }
-            .sorted { $0.name < $1.name }
+            .sorted { lhs, rhs in
+                switch (lhs.name == Host.localGroup, rhs.name == Host.localGroup) {
+                case (true, false): return false
+                case (false, true): return true
+                default: return lhs.name < rhs.name
+                }
+            }
     }
 
     private func connect(_ host: Host) {
@@ -108,6 +165,8 @@ struct HostsView: View {
 private struct HostRow: View {
     let host: Host
     let identity: Identity?
+    var showsLastSeen = false
+    var isUnreachable = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -136,10 +195,21 @@ private struct HostRow: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
+                if showsLastSeen {
+                    Text(lastSeenLabel)
+                        .font(.caption2)
+                        .foregroundStyle(isUnreachable ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.tertiary))
+                }
             }
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+    }
+
+    private var lastSeenLabel: String {
+        if isUnreachable { return "no answer" }
+        guard let lastSeen = host.lastSeen else { return "never seen" }
+        return "seen \(lastSeen.formatted(.relative(presentation: .numeric)))"
     }
 
     private var accent: Color {

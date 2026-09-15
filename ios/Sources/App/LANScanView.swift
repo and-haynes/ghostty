@@ -13,6 +13,11 @@ struct LANScanView: View {
     @StateObject private var pinner: HostKeyPinner
 
     @State private var selection: Set<String> = []
+    /// Alias overrides, keyed by address. Editing the name at the point of
+    /// import is the only moment anyone knows which of six anonymous 10.0.0.x
+    /// boxes is the NAS, so the field belongs in the results row rather than
+    /// in a host editor five taps later.
+    @State private var aliases: [String: String] = [:]
     @State private var portMode: PortMode = .curated
     @State private var customPorts = ""
     @State private var username = ""
@@ -98,11 +103,21 @@ struct LANScanView: View {
 
             LabeledField("Username", text: $username, placeholder: "andy", autocorrect: false)
 
+            if let subnet = scanner.subnetDescription {
+                HStack {
+                    Text("Network")
+                    Spacer()
+                    Text(subnet).font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+            }
+
             if scanner.isScanning {
                 VStack(alignment: .leading, spacing: 4) {
                     ProgressView(value: scanner.progress)
                     Text(scanner.statusLine).font(.caption).foregroundStyle(.secondary)
                 }
+            } else if !scanner.statusLine.isEmpty {
+                Text(scanner.statusLine).font(.caption).foregroundStyle(.secondary)
             }
         } header: {
             Text("Scan")
@@ -126,9 +141,12 @@ struct LANScanView: View {
         } else {
             Section {
                 ForEach(scanner.hosts) { host in
-                    LANHostRow(host: host, selected: selection.contains(host.id)) {
-                        toggle(host)
-                    }
+                    LANHostRow(
+                        host: host,
+                        selected: selection.contains(host.id),
+                        alias: aliasBinding(for: host),
+                        onTap: { toggle(host) }
+                    )
                 }
             } header: {
                 Text("\(scanner.hosts.count) host\(scanner.hosts.count == 1 ? "" : "s")")
@@ -165,7 +183,24 @@ struct LANScanView: View {
 
     private func toggle(_ host: LANHost) {
         Haptics.shared.fire(.selectionChip)
-        if selection.contains(host.id) { selection.remove(host.id) } else { selection.insert(host.id) }
+        if selection.contains(host.id) {
+            selection.remove(host.id)
+        } else {
+            selection.insert(host.id)
+            if aliases[host.id] == nil { aliases[host.id] = host.displayName }
+        }
+    }
+
+    private func aliasBinding(for host: LANHost) -> Binding<String> {
+        Binding(
+            get: { aliases[host.id] ?? host.displayName },
+            set: { aliases[host.id] = $0 }
+        )
+    }
+
+    private func alias(for host: LANHost) -> String {
+        let chosen = (aliases[host.id] ?? host.displayName).trimmingCharacters(in: .whitespaces)
+        return chosen.isEmpty ? host.address : chosen
     }
 
     // MARK: - Actions
@@ -209,7 +244,7 @@ struct LANScanView: View {
                     continue
                 }
                 var host = Host(
-                    alias: lan.hostname ?? lan.address,
+                    alias: alias(for: lan),
                     hostname: lan.address,
                     port: port.port,
                     username: user,
@@ -225,7 +260,7 @@ struct LANScanView: View {
 
             for port in lan.otherPorts {
                 addedServices.append(LocalService(
-                    alias: lan.hostname ?? lan.address,
+                    alias: alias(for: lan),
                     address: lan.address,
                     port: port.port,
                     serviceType: port.serviceName,
@@ -252,9 +287,26 @@ struct LANScanView: View {
 private struct LANHostRow: View {
     let host: LANHost
     let selected: Bool
+    @Binding var alias: String
     let onTap: () -> Void
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            summaryButton
+            if selected {
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil").font(.caption2).foregroundStyle(.secondary)
+                    TextField("Name", text: $alias)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .font(.callout)
+                }
+                .padding(.leading, 26)
+            }
+        }
+    }
+
+    private var summaryButton: some View {
         Button(action: onTap) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
@@ -268,6 +320,11 @@ private struct LANHostRow: View {
                     }
                     if host.hostname != nil {
                         Text(host.address).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    }
+                    if !host.bonjourServices.isEmpty {
+                        Text(host.bonjourServices.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                     Text(host.summary)
                         .font(.caption2)
