@@ -173,12 +173,11 @@ struct LANScanView: View {
         selection.isEmpty ? scanner.hosts : scanner.hosts.filter { selection.contains($0.id) }
     }
 
+    /// Pin what is already in the vault, so the fingerprints recorded are for
+    /// hosts the user actually kept rather than for every address that
+    /// happened to answer on 22.
     private var sshHostsToPin: [Host] {
-        // Pin what is already in the vault, so the fingerprints recorded are
-        // for hosts the user actually kept.
-        vault.localHosts.filter { host in
-            chosenHosts.contains { $0.address == host.hostname }
-        }
+        LANImporter.sshHosts(in: vault, matching: chosenHosts)
     }
 
     private func toggle(_ host: LANHost) {
@@ -226,55 +225,20 @@ struct LANScanView: View {
     }
 
     private func importSelected() {
-        let hosts = chosenHosts
-        guard !hosts.isEmpty else { return }
-        let user = username.isEmpty ? settings.lastUsername : username
+        let results = chosenHosts
+        guard !results.isEmpty else { return }
+        let user = username.trimmingCharacters(in: .whitespaces)
+        if !user.isEmpty { settings.lastUsername = user }
 
-        var addedHosts = 0
-        var addedServices: [LocalService] = []
-
-        for lan in hosts {
-            for port in lan.sshPorts {
-                // Re-importing after a re-scan should refresh, not duplicate.
-                let existing = vault.hosts.first {
-                    $0.hostname == lan.address && $0.port == port.port
-                }
-                if let existing {
-                    vault.markSeen(existing)
-                    continue
-                }
-                var host = Host(
-                    alias: alias(for: lan),
-                    hostname: lan.address,
-                    port: port.port,
-                    username: user,
-                    group: Host.localGroup,
-                    tags: lan.bonjourServices.isEmpty ? [] : ["bonjour"],
-                    notes: port.banner ?? "",
-                    lastSeen: lan.lastSeen
-                )
-                host.term = settings.defaultTerm
-                vault.upsert(host)
-                addedHosts += 1
-            }
-
-            for port in lan.otherPorts {
-                addedServices.append(LocalService(
-                    alias: alias(for: lan),
-                    address: lan.address,
-                    port: port.port,
-                    serviceType: port.serviceName,
-                    scheme: port.guess.scheme,
-                    lastSeen: lan.lastSeen
-                ))
-            }
-        }
-
-        vault.upsertLocalServices(addedServices)
-        settings.lastUsername = user
-        Haptics.shared.fire(.syncSucceeded)
-        importSummary = "\(addedHosts) SSH host\(addedHosts == 1 ? "" : "s") and "
-            + "\(addedServices.count) local service\(addedServices.count == 1 ? "" : "s")."
+        let summary = LANImporter.import(
+            results,
+            into: vault,
+            username: user.isEmpty ? settings.lastUsername : user,
+            term: settings.defaultTerm,
+            aliases: aliases
+        )
+        Haptics.shared.fire(summary.isEmpty ? .syncFailed : .syncSucceeded)
+        importSummary = summary.description
     }
 
     private func pinSelected() {
