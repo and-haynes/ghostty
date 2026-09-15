@@ -73,6 +73,7 @@
 		E888DF4FC2AD4C8B16DF2C8F /* EncryptedBundleProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8555E7685151D6C6D3A340F4 /* EncryptedBundleProvider.swift */; };
 		EE71EEAD746A5C409F337F74 /* VaultSyncProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6C5B885752B18DB0A58F8E /* VaultSyncProvider.swift */; };
 		F5A4DEA542D1A8563D33D0A3 /* TerminalUIView+Input.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447EECEE3A8F82F58C1FC070 /* TerminalUIView+Input.swift */; };
+		F716EB1CBEA15C2DE40C538D /* TerminalGestureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50D2C1CF6FAD15BD3DE35746 /* TerminalGestureTests.swift */; };
 		F86C7C761665BF38DC3BA455 /* Vault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D7083B895C6269CFE11CBF1 /* Vault.swift */; };
 		FAB1A5B26FFAEA82694DF070 /* TerminalTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 856FA619D8BEEB4B4F9F7406 /* TerminalTheme.swift */; };
 		FDCCAB9A98E138088C81FB58 /* SSHSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C680D3B5EFF926E44658C176 /* SSHSession.swift */; };
@@ -122,6 +123,7 @@
 		488B3B502B944742D3F08D8A /* EncryptedBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptedBundle.swift; sourceTree = "<group>"; };
 		4C695FF62790A308B7229F42 /* ICloudKeychainSyncProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudKeychainSyncProvider.swift; sourceTree = "<group>"; };
 		4EF49330030EC86C10F97CE3 /* BitwardenAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BitwardenAPIClient.swift; sourceTree = "<group>"; };
+		50D2C1CF6FAD15BD3DE35746 /* TerminalGestureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalGestureTests.swift; sourceTree = "<group>"; };
 		538AD64D5457BA0737EC2697 /* ghostty-vt.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "ghostty-vt.xcframework"; path = "Frameworks/ghostty-vt.xcframework"; sourceTree = "<group>"; };
 		54B837BBE69D404BB76782C4 /* KeyBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyBarView.swift; sourceTree = "<group>"; };
 		583526C7E840C9E7D8A23A36 /* OpenSSHKeyFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenSSHKeyFile.swift; sourceTree = "<group>"; };
@@ -374,6 +376,7 @@
 				D221653B3D21AF0E1C7160F3 /* GhosttyVTTests.swift */,
 				844E3E1E3C20D786223C0437 /* HapticsTests.swift */,
 				17551D804A17C5EB6AC039DF /* SyncBundleTests.swift */,
+				50D2C1CF6FAD15BD3DE35746 /* TerminalGestureTests.swift */,
 				F84592D5659095225928F804 /* VaultSyncTests.swift */,
 				E73F05362EC2672A5850E126 /* VaultTests.swift */,
 			);
@@ -616,6 +619,7 @@
 				76977A751BBF637AB93AA587 /* GhosttyVTTests.swift in Sources */,
 				00135E13676B45245A21384B /* HapticsTests.swift in Sources */,
 				A49B641D079562D8B4C0FDFD /* SyncBundleTests.swift in Sources */,
+				F716EB1CBEA15C2DE40C538D /* TerminalGestureTests.swift in Sources */,
 				A5E8221EAA75484B2EF548D0 /* VaultSyncTests.swift in Sources */,
 				AF99F8BF37E374A41ACACBA4 /* VaultTests.swift in Sources */,
 			);

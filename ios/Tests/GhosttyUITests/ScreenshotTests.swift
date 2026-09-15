@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Drives the real app to produce the screenshots in `ios/docs/screenshots/`.
@@ -13,6 +14,10 @@ import XCTest
 final class ScreenshotTests: XCTestCase {
     private var outputDirectory: URL!
     private var captured: [String] = []
+    /// Cleared once per test *process*, not once per test: the screenshots are
+    /// produced by more than one test now, and wiping the directory in each
+    /// `setUp` would leave whichever ran last as the only survivor.
+    private static var didClearOutputDirectory = false
 
     override func setUpWithError() throws {
         // Keep going after a soft failure so one missing element does not cost
@@ -20,7 +25,10 @@ final class ScreenshotTests: XCTestCase {
         continueAfterFailure = true
         outputDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ghostty-screenshots", isDirectory: true)
-        try? FileManager.default.removeItem(at: outputDirectory)
+        if !Self.didClearOutputDirectory {
+            Self.didClearOutputDirectory = true
+            try? FileManager.default.removeItem(at: outputDirectory)
+        }
         try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
     }
 
@@ -140,13 +148,19 @@ final class ScreenshotTests: XCTestCase {
         }
         capture(app, named: "08-keyboard-toggle")
 
-        // 9. The selection helper: a long press starts a selection and fades
-        //    in the input/output bands and chips.
+        // 9. The selection helper: a long press *and drag* starts a selection
+        //    and fades in the input/output bands and chips. The drag is
+        //    load-bearing — a stationary long press is the edit-menu gesture
+        //    now (#008A5), and the helper deliberately stays out of its way.
         let terminal = app.children(matching: .window).element(boundBy: 0)
-        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.35))
-            .press(forDuration: 0.8)
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.35))
+            .press(
+                forDuration: 0.8,
+                thenDragTo: terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.45))
+            )
         Thread.sleep(forTimeInterval: 1.0)
         capture(app, named: "09-selection-helper")
+        dismissAnyMenu(app)
         if app.alerts.firstMatch.exists {
             app.alerts.firstMatch.buttons.element(boundBy: 0).tap()
         }
@@ -158,6 +172,76 @@ final class ScreenshotTests: XCTestCase {
         app.swipeUp()
         Thread.sleep(forTimeInterval: 0.5)
         capture(app, named: "10-sync-settings")
+    }
+
+    /// 14. The edit menu on a stationary long press.
+    ///
+    /// This is the #008A5 regression: the selection helper used to swallow the
+    /// long press, so the iOS edit menu — and with it **Paste** — never
+    /// appeared and there was no way to paste into a session at all. The
+    /// assertion is the point; the screenshot is the evidence.
+    func testPasteMenuAppearsOnLongPress() {
+        // The simulator's pasteboard is shared with the test runner, so this
+        // really does put text where the app will look for it.
+        UIPasteboard.general.string = "echo pasted from the clipboard"
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-ghostty-seed"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Hosts"].waitForExistence(timeout: 30), "the app should launch")
+
+        app.tabBars.buttons["Console"].tap()
+        _ = app.navigationBars["Console"].waitForExistence(timeout: 10)
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let terminal = app.children(matching: .window).element(boundBy: 0)
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            .press(forDuration: 0.9)
+        Thread.sleep(forTimeInterval: 1.0)
+
+        if !pasteItem(app).waitForExistence(timeout: 5) {
+            print("ghostty-paste-menu: hierarchy after a stationary long press follows")
+            print(app.debugDescription)
+        }
+        XCTAssertTrue(
+            pasteItem(app).exists,
+            "a stationary long press must open the edit menu with a Paste item"
+        )
+        capture(app, named: "14-paste-menu")
+        dismissAnyMenu(app)
+
+        // And again with the keyboard up: the key bar occupies the row above
+        // the keyboard, and the menu has to appear over the terminal regardless.
+        focusTerminal(app)
+        terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            .press(forDuration: 0.9)
+        XCTAssertTrue(
+            pasteItem(app).waitForExistence(timeout: 5),
+            "the edit menu must also open while the software keyboard is up"
+        )
+        dismissAnyMenu(app)
+    }
+
+    /// The edit menu's Paste item.
+    ///
+    /// Deliberately scoped to the menu rather than asking the app for any
+    /// element called "Paste": the key bar has its own Paste button with that
+    /// exact accessibility label, and a query that matches it would pass
+    /// whether or not the edit menu ever appeared — which is precisely the bug
+    /// under test.
+    private func pasteItem(_ app: XCUIApplication) -> XCUIElement {
+        let asMenuItem = app.menuItems["Paste"].firstMatch
+        if asMenuItem.exists { return asMenuItem }
+        return app.menus.descendants(matching: .any).matching(identifier: "Paste").firstMatch
+    }
+
+    private func dismissAnyMenu(_ app: XCUIApplication) {
+        guard app.menuItems.count > 0 || app.buttons["Paste"].exists else { return }
+        // Tapping well away from the menu closes it without invoking anything.
+        app.children(matching: .window).element(boundBy: 0)
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08))
+            .tap()
+        Thread.sleep(forTimeInterval: 0.5)
     }
 
     private func focusTerminal(_ app: XCUIApplication) {

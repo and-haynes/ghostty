@@ -139,7 +139,7 @@ extension TerminalUIView {
             session.sendKey(key, mods: mods)
         case .literal(let text): session.sendText(text, mods: mods)
         case .paste: pasteFromClipboard()
-        case .hideKeyboard: resignFirstResponder()
+        case .hideKeyboard: _ = resignFirstResponder()
         }
     }
 
@@ -162,27 +162,84 @@ extension TerminalUIView {
 // MARK: - Edit menu
 
 extension TerminalUIView: @preconcurrency UIEditMenuInteractionDelegate {
+    /// The terminal's edit menu: the system's standard items first, then ours.
+    ///
+    /// `suggestedActions` is where Copy / Paste / Select All come from, built by
+    /// UIKit from `canPerformAction(_:withSender:)`. Using them rather than
+    /// hand-rolled look-alikes is what makes Paste work without the "Allow
+    /// Paste?" alert, and it is what an XCUITest finds when it looks for a menu
+    /// item called "Paste".
+    ///
+    /// The fallback matters too: this interaction can be triggered while the
+    /// terminal is not the first responder (the keyboard is hidden, or a
+    /// hardware keyboard is attached), and an empty `suggestedActions` in that
+    /// state would otherwise mean an empty menu.
     func editMenuInteraction(
         _ interaction: UIEditMenuInteraction,
         menuFor configuration: UIEditMenuConfiguration,
         suggestedActions: [UIMenuElement]
     ) -> UIMenu? {
-        var actions: [UIAction] = []
+        var children: [UIMenuElement] = suggestedActions
+        if children.isEmpty {
+            children = fallbackEditActions()
+        }
+        children.append(contentsOf: terminalSelectionActions())
+        return children.isEmpty ? nil : UIMenu(children: children)
+    }
+
+    /// Copy / Paste / Select All, for the case where UIKit offered none.
+    private func fallbackEditActions() -> [UIMenuElement] {
+        var actions: [UIMenuElement] = []
         if session?.terminal.hasSelection == true {
-            actions.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
-                self?.copySelection()
-            })
+            actions.append(
+                UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                    self?.copySelection()
+                }
+            )
         }
         if UIPasteboard.general.hasStrings {
-            actions.append(UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
-                self?.pasteFromClipboard()
-            })
+            actions.append(
+                UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+                    self?.pasteFromClipboard()
+                }
+            )
         }
-        actions.append(UIAction(title: "Select All", image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in
-            guard let session = self?.session else { return }
-            _ = session.terminal.selectAll()
-            session.invalidateRender()
-        })
-        return actions.isEmpty ? nil : UIMenu(children: actions)
+        actions.append(
+            UIAction(title: "Select All", image: UIImage(systemName: "selection.pin.in.out")) {
+                [weak self] _ in
+                self?.selectAll(nil)
+            }
+        )
+        return actions
+    }
+
+    /// The terminal-specific selections: the word under the finger, and the
+    /// input/output ranges the selection helper also offers as chips.
+    private func terminalSelectionActions() -> [UIMenuElement] {
+        guard session != nil else { return [] }
+        var actions: [UIAction] = [
+            UIAction(title: "Select Word", image: UIImage(systemName: "textformat.abc")) {
+                [weak self] _ in
+                self?.selectWordAtMenuPoint()
+            }
+        ]
+        let derived = currentSelectionSuggestion()
+        if derived.inputRows != nil {
+            actions.append(
+                UIAction(title: "Select Input", image: UIImage(systemName: "chevron.right")) {
+                    [weak self] _ in
+                    self?.selectSuggested(.input)
+                }
+            )
+        }
+        if derived.outputRows != nil {
+            actions.append(
+                UIAction(title: "Select Output", image: UIImage(systemName: "text.alignleft")) {
+                    [weak self] _ in
+                    self?.selectSuggested(.output)
+                }
+            )
+        }
+        return [UIMenu(title: "", options: .displayInline, children: actions)]
     }
 }

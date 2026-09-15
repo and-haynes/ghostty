@@ -63,6 +63,93 @@ struct SelectionSuggestion: Equatable {
     }
 }
 
+/// Decides what a long press on the terminal *means*.
+///
+/// It has to mean two different things, and the app previously only ever did
+/// one of them: a long press started a word selection and raised the selection
+/// helper, which meant the system edit menu — and therefore **Paste** — could
+/// never appear. There was no way to paste into a session at all.
+///
+/// The rule, which is the one every other iOS text surface uses:
+///
+/// * **Press and hold still** → the edit menu, at the touch point.
+/// * **Press and hold, then drag** → a selection, anchored at the press, with
+///   the selection helper's bands and chips.
+///
+/// The distinction is movement past a small threshold, which is why it lives
+/// here as a value type: the arbitration is the part worth testing, and it
+/// tests without a simulator, a gesture recogniser or a touch.
+struct LongPressArbiter: Equatable {
+    /// How far a finger may wander and still count as "held still". One cell
+    /// is too small — fingers roll — and 44pt is a whole tap target; 12pt is
+    /// about the same slop `UILongPressGestureRecognizer` allows by default.
+    static let movementThreshold: CGFloat = 12
+
+    /// What the caller should do about a touch event.
+    enum Outcome: Equatable {
+        /// Nothing yet: still deciding.
+        case wait
+        /// Movement crossed the threshold — start selecting from the anchor.
+        case beginSelection
+        /// A selection is already running; extend it.
+        case extendSelection
+        /// The press ended without ever moving — show the edit menu.
+        case presentEditMenu
+        /// The press ended after a drag — leave the selection and its helper up.
+        case keepSelection
+    }
+
+    private enum Phase: Equatable {
+        case idle
+        case holding
+        case selecting
+    }
+
+    private var phase: Phase = .idle
+    private var origin: CGPoint = .zero
+
+    /// True once the press has turned into a drag-selection.
+    var isSelecting: Bool { self.phase == .selecting }
+
+    mutating func began(at point: CGPoint) {
+        self.phase = .holding
+        self.origin = point
+    }
+
+    mutating func moved(to point: CGPoint) -> Outcome {
+        switch self.phase {
+        case .idle:
+            return .wait
+        case .selecting:
+            return .extendSelection
+        case .holding:
+            let dx = point.x - self.origin.x
+            let dy = point.y - self.origin.y
+            guard (dx * dx + dy * dy).squareRoot() > Self.movementThreshold else {
+                return .wait
+            }
+            self.phase = .selecting
+            return .beginSelection
+        }
+    }
+
+    mutating func ended() -> Outcome {
+        defer { self.phase = .idle }
+        switch self.phase {
+        case .selecting:
+            return .keepSelection
+        case .holding:
+            return .presentEditMenu
+        case .idle:
+            return .wait
+        }
+    }
+
+    mutating func cancelled() {
+        self.phase = .idle
+    }
+}
+
 /// Which suggestion a chip stands for.
 enum SelectionChip: CaseIterable {
     case input, output, both
@@ -140,6 +227,19 @@ final class SelectionChipBar: UIView {
         buttons[.input]?.isHidden = suggestion.inputRows == nil
         buttons[.output]?.isHidden = suggestion.outputRows == nil
         buttons[.both]?.isHidden = suggestion.inputRows == nil || suggestion.outputRows == nil
+    }
+
+    /// Only the chips themselves take touches.
+    ///
+    /// The bar is a container with spacing between its buttons, and a hit on
+    /// that spacing used to swallow a touch meant for the terminal underneath —
+    /// including the long press that opens the edit menu. Passing through
+    /// anything that is not a chip keeps the helper a *suggestion* rather than
+    /// an invisible wall over the screen.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden, alpha > 0.01 else { return nil }
+        let hit = super.hitTest(point, with: event)
+        return hit is UIButton ? hit : nil
     }
 
     func setVisible(_ visible: Bool) {

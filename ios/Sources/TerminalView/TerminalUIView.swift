@@ -101,6 +101,11 @@ final class TerminalUIView: UIView {
     }()
     private var selectionAnchor: (x: Int, y: Int)?
     private var lastSelectionPoint: (x: Int, y: Int)?
+    /// Decides whether a long press means "edit menu" or "start selecting".
+    private var longPress = LongPressArbiter()
+    /// The grid cell the edit menu was raised over, so "Select word" acts on
+    /// the word the user actually pointed at.
+    private var menuGridPoint: (x: Int, y: Int)?
     private var scrollAccumulator: CGFloat = 0
     private var pinchStartFontSize: CGFloat = 12
 
@@ -141,8 +146,18 @@ final class TerminalUIView: UIView {
         // Selection wins over scrolling once a long press has begun.
         pan.require(toFail: longPress)
 
+        // A two-finger tap opens the edit menu too — the convention every
+        // other terminal app on iOS uses, and the one that still works when a
+        // hardware keyboard means nobody is long-pressing anything.
+        let twoFingerTap = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap))
+        twoFingerTap.numberOfTouchesRequired = 2
+        addGestureRecognizer(twoFingerTap)
+
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch))
         addGestureRecognizer(pinch)
+        // A two-finger tap is a pinch that never moved; let the tap win when
+        // the fingers stay put.
+        pinch.require(toFail: twoFingerTap)
 
         let interaction = UIEditMenuInteraction(delegate: self)
         addInteraction(interaction)
@@ -333,7 +348,7 @@ final class TerminalUIView: UIView {
     // MARK: - Selection helper
 
     private func showSuggestion(near point: CGPoint) {
-        let derived = SelectionSuggestion.derive(lines: lines, cursorRow: model.cursor?.y)
+        let derived = currentSelectionSuggestion()
         guard !derived.isEmpty else { return }
         suggestion = derived
         chipBar.configure(for: derived)
@@ -363,7 +378,26 @@ final class TerminalUIView: UIView {
         setNeedsDisplay()
     }
 
-    private func applySuggestion(_ chip: SelectionChip) {
+    /// The input/output ranges for the frame on screen right now.
+    ///
+    /// Read by the edit menu as well as the chips, so both offer the same two
+    /// selections whether or not the helper happens to be up.
+    func currentSelectionSuggestion() -> SelectionSuggestion {
+        SelectionSuggestion.derive(lines: lines, cursorRow: model.cursor?.y)
+    }
+
+    /// Apply a suggested selection from the edit menu, where re-presenting the
+    /// menu afterwards would be a loop.
+    func selectSuggested(_ chip: SelectionChip) {
+        if suggestion == nil {
+            let derived = currentSelectionSuggestion()
+            guard !derived.isEmpty else { return }
+            suggestion = derived
+        }
+        applySuggestion(chip, presentingMenu: false)
+    }
+
+    private func applySuggestion(_ chip: SelectionChip, presentingMenu: Bool = true) {
         guard let session, let suggestion else { return }
         let range: ClosedRange<Int>?
         switch chip {
@@ -396,7 +430,9 @@ final class TerminalUIView: UIView {
         guard applied else { return }
         session.invalidateRender()
         Haptics.shared.fire(.selectionChip)
-        presentEditMenu(at: CGPoint(x: chipBar.frame.midX, y: chipBar.frame.maxY + 8))
+        if presentingMenu {
+            presentEditMenu(at: CGPoint(x: chipBar.frame.midX, y: chipBar.frame.maxY + 8))
+        }
     }
 
     private func drawRow(_ row: VTRow, at y: Int, in ctx: CGContext) {
@@ -682,7 +718,7 @@ final class TerminalUIView: UIView {
             hideSuggestion()
             return
         }
-        if !isFirstResponder { becomeFirstResponder() }
+        if !isFirstResponder { _ = becomeFirstResponder() }
     }
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -704,36 +740,66 @@ final class TerminalUIView: UIView {
         }
     }
 
+    /// Long press: held still it opens the edit menu, dragged it selects.
+    ///
+    /// The arbitration lives in `LongPressArbiter` so it can be tested without
+    /// a touch. Getting it wrong is not cosmetic — the previous version started
+    /// a selection on `.began` and then suppressed the edit menu because a
+    /// selection existed, which left the app with no way to paste at all.
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let session else { return }
-        let point = gridPoint(at: gesture.location(in: self))
+        let location = gesture.location(in: self)
+        let point = gridPoint(at: location)
+
         switch gesture.state {
         case .began:
+            // Deliberately nothing visible yet: no selection, no chips, no
+            // haptic. Until the finger moves this is a menu gesture.
+            longPress.began(at: location)
             selectionAnchor = point
-            session.selectWord(atColumn: point.x, row: point.y)
-            Haptics.shared.fire(.selectionStart)
-            showSuggestion(near: gesture.location(in: self))
+
         case .changed:
-            guard let anchor = selectionAnchor else { return }
-            // One tick per cell crossed, not per touch sample — a drag emits
-            // dozens of those a second.
-            let movedToNewCell = lastSelectionPoint.map { $0 != point } ?? true
-            if movedToNewCell {
+            switch longPress.moved(to: location) {
+            case .beginSelection:
+                guard let anchor = selectionAnchor else { return }
+                session.selectWord(atColumn: anchor.x, row: anchor.y)
+                Haptics.shared.fire(.selectionStart)
+                showSuggestion(near: location)
+                session.extendSelection(from: anchor, to: point)
                 lastSelectionPoint = point
-                Haptics.shared.fire(.selectionExtend)
+            case .extendSelection:
+                guard let anchor = selectionAnchor else { return }
+                // One tick per cell crossed, not per touch sample — a drag
+                // emits dozens of those a second.
+                if lastSelectionPoint.map({ $0 != point }) ?? true {
+                    lastSelectionPoint = point
+                    Haptics.shared.fire(.selectionExtend)
+                }
+                session.extendSelection(from: anchor, to: point)
+            case .wait, .presentEditMenu, .keepSelection:
+                break
             }
-            session.extendSelection(from: anchor, to: point)
-        case .ended, .cancelled:
+
+        case .ended:
             lastSelectionPoint = nil
-            // When the helper is up, its chips already offer the useful
-            // actions and the system menu would sit on top of them. Tapping a
-            // chip presents the menu afterwards, so nothing is lost.
-            if suggestion == nil {
-                presentEditMenu(at: gesture.location(in: self))
+            if longPress.ended() == .presentEditMenu {
+                menuGridPoint = point
+                presentEditMenu(at: location)
             }
+
+        case .cancelled, .failed:
+            lastSelectionPoint = nil
+            longPress.cancelled()
+
         default:
             break
         }
+    }
+
+    @objc private func handleTwoFingerTap(_ gesture: UITapGestureRecognizer) {
+        let location = gesture.location(in: self)
+        menuGridPoint = gridPoint(at: location)
+        presentEditMenu(at: location)
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
@@ -777,12 +843,52 @@ final class TerminalUIView: UIView {
         session.paste(text)
     }
 
+    /// Select the word under the point the edit menu was raised over.
+    ///
+    /// This is what a stationary long press used to do implicitly. It is a menu
+    /// item now rather than a gesture, because the gesture is needed for the
+    /// menu itself.
+    @objc func selectWordAtMenuPoint() {
+        guard let session, let point = menuGridPoint else { return }
+        session.selectWord(atColumn: point.x, row: point.y)
+        session.invalidateRender()
+    }
+
+    // MARK: Standard edit actions
+    //
+    // These are the `UIResponderStandardEditActions` selectors, implemented so
+    // UIKit offers its *own* Copy / Paste / Select All in the edit menu. That
+    // matters for more than tidiness: when the user taps the system's Paste
+    // item, UIKit treats the pasteboard read as user-initiated and does not
+    // interrupt with the "Allow Paste?" alert. A hand-rolled `UIAction` titled
+    // "Paste" gets the alert every time.
+
+    override func copy(_ sender: Any?) {
+        copySelection()
+    }
+
+    override func paste(_ sender: Any?) {
+        pasteFromClipboard()
+    }
+
+    override func selectAll(_ sender: Any?) {
+        guard let session else { return }
+        _ = session.terminal.selectAll()
+        session.invalidateRender()
+    }
+
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
-        case #selector(copySelection):
+        case #selector(copy(_:)), #selector(copySelection):
             return session?.terminal.hasSelection ?? false
-        case #selector(pasteFromClipboard):
+        case #selector(paste(_:)), #selector(pasteFromClipboard):
+            // `hasStrings` is explicitly exempt from the pasteboard privacy
+            // prompt, so asking it here costs the user nothing.
             return UIPasteboard.general.hasStrings
+        case #selector(selectAll(_:)):
+            return session != nil
+        case #selector(selectWordAtMenuPoint):
+            return session != nil && menuGridPoint != nil
         default:
             return super.canPerformAction(action, withSender: sender)
         }

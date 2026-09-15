@@ -207,14 +207,30 @@ The keyboard toggle uses the real `keyboard.chevron.compact.down` symbol, and
 when the bar is collapsed a floating `keyboard` button appears bottom-right of
 the terminal — the way back is always one tap away.
 
-## The selection helper
+## Selection, and the edit menu
 
-Long-press to start a selection and a suggestion fades in: translucent bands
-behind the **input** (the current command line) and the **output** (the
-previous command's), plus `Input · Output · Both` chips near your finger.
-Tapping a chip sets that exact selection; your own drag keeps working
-untouched, because the chips are sibling views rather than a gesture and a
-finger already owned by the drag stays owned by it.
+A long press means two different things, decided by whether the finger moves:
+
+* **Hold still** → the standard iOS edit menu at the touch point: Paste, Copy
+  (when there is a selection), Select All, Select Word, and Select Input /
+  Select Output. A two-finger tap opens the same menu, which is the convention
+  other terminal apps use and the only route when a hardware keyboard is
+  attached. The menu's items are UIKit's own, not look-alikes, so tapping
+  **Paste** is treated as user-initiated and does not raise the *Allow Paste?*
+  alert.
+* **Hold, then drag** → a selection anchored on the word under the press, with
+  the selection helper: translucent bands behind the **input** (the current
+  command line) and the **output** (the previous command's), plus
+  `Input · Output · Both` chips near your finger. Tapping a chip sets that exact
+  selection; your own drag keeps working untouched, because the chips are
+  sibling views rather than a gesture and a finger already owned by the drag
+  stays owned by it. The chip bar passes through every touch that is not on a
+  chip, so it can never steal the gesture underneath it.
+
+The threshold between the two is 12 points, which is roughly the slop
+`UILongPressGestureRecognizer` already tolerates — a resting finger rolls, and
+that must not read as a drag. The arbitration is a value type
+(`LongPressArbiter`) precisely so it can be tested without a touch.
 
 With OSC 133 shell integration the ranges come from real prompt marks and the
 chips use `ghostty_terminal_select_line` / `ghostty_terminal_select_output`,
@@ -257,7 +273,7 @@ nothing at all when it is off. Scrolling terminal output is deliberately silent.
 | Selection helper | Input/output bands and `Input · Output · Both` chips on long-press, OSC 133 aware with a cursor-based fallback |
 | Sync | iCloud Keychain, Bitwarden/Vaultwarden, 1Password Connect, encrypted bundle; newest-wins merge; per-provider status in Settings |
 | Haptics | Off/Subtle/Normal/Rich, ~25 mapped events, CoreHaptics bell, rate-limited, silent in the background |
-| Gestures | Pinch to resize the font, pan to scroll the viewport through scrollback, long-press to select a word and drag to extend, edit menu with Copy / Paste / Select All |
+| Gestures | Pinch to resize the font, pan to scroll the viewport through scrollback, long-press-and-drag to select, stationary long-press or two-finger tap for the edit menu (Copy / Paste / Select All / Select Word / Select Input / Select Output) |
 | Paste | Bracketed-paste aware, unsafe-paste confirmation |
 | SSH | Connect, host key verification, `pty-req` (configurable TERM), `env`, `shell` or `exec`, `window-change`, clean disconnect, bounded reconnect with backoff |
 | Auth | Password (stored or prompted), public key: Ed25519, ECDSA P-256/384/521, **Secure Enclave P-256** |
@@ -324,6 +340,8 @@ on an iPhone 17 simulator.
 | The reorganised key bar with Ctrl armed and the `Fn` row open | The floating keyboard button, shown when the bar is collapsed |
 | ![Selection helper](docs/screenshots/09-selection-helper.png) | ![Sync](docs/screenshots/10-sync-settings.png) |
 | Input/output bands and the selection chips | Sync providers in Settings |
+| ![Paste menu](docs/screenshots/14-paste-menu.png) | |
+| The edit menu on a stationary long press — Paste, Select All, Select Word, and the input/output selections behind the chevron | |
 
 ## Toolchain
 
