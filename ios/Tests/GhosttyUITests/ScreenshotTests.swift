@@ -445,6 +445,7 @@ final class ScreenshotTests: XCTestCase {
             .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08))
             .tap()
         Thread.sleep(forTimeInterval: 0.5)
+    }
 
     /// Screenshots 11–12: a real sweep of whatever subnet this machine is on,
     /// and the Local group the import produces.
