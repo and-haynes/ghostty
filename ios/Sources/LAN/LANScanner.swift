@@ -222,7 +222,7 @@ final class LANScanner: ObservableObject {
 
     // MARK: - Shaping
 
-    static func hosts(from openPorts: [String: [LANOpenPort]]) -> [LANHost] {
+    nonisolated static func hosts(from openPorts: [String: [LANOpenPort]]) -> [LANHost] {
         openPorts
             .map { address, ports in
                 LANHost(address: address, openPorts: ports.sorted { $0.port < $1.port })
@@ -232,7 +232,7 @@ final class LANScanner: ObservableObject {
 
     /// Bonjour advertisements as scan results, so the merge has one shape to
     /// reconcile. An advertised port counts as open: the machine said so.
-    static func hosts(from services: [BonjourService]) -> [LANHost] {
+    nonisolated static func hosts(from services: [BonjourService]) -> [LANHost] {
         var byAddress: [String: LANHost] = [:]
         for service in services {
             var host = byAddress[service.address]
@@ -256,7 +256,7 @@ final class LANScanner: ObservableObject {
             .sorted { LANResultsMerge.addressLess($0.address, $1.address) }
     }
 
-    private static func describeInterface() -> String? {
+    nonisolated private static func describeInterface() -> String? {
         guard let interface = LANInterface.current(), let subnet = interface.subnet else { return nil }
         return "\(interface.name) · \(subnet.cidr) · \(subnet.hostAddresses().count) addresses"
     }
@@ -279,7 +279,7 @@ extension LANScanner {
     /// This is what the Hosts tab's "Re-scan" does, and it is deliberately not
     /// a subnet sweep: the question there is "are the machines I kept awake?",
     /// which is `localHosts.count` probes rather than thousands.
-    static func recheck(
+    nonisolated static func recheck(
         _ hosts: [Host],
         timeout: TimeInterval = TCPProbe.defaultTimeout
     ) async -> Set<UUID> {

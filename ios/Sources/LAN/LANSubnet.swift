@@ -106,9 +106,12 @@ struct LANSubnet: Equatable, Sendable {
     }
 
     /// Contiguous masks only — `255.255.0.255` gets nil rather than a guess.
+    ///
+    /// The prefix is 32 minus the run of trailing zeroes; rebuilding the mask
+    /// from it and comparing is what rejects a discontiguous one.
     static func prefixLength(ofMask mask: UInt32) -> Int? {
-        let ones = mask.leadingZeroBitCount == 32 ? 0 : (~mask).trailingZeroBitCount
-        let prefix = 32 - ones
+        let trailingZeroes = mask == 0 ? 32 : mask.trailingZeroBitCount
+        let prefix = 32 - trailingZeroes
         guard LANSubnet.mask(forPrefixLength: prefix) == mask else { return nil }
         return prefix
     }

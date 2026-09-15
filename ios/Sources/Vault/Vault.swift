@@ -312,7 +312,13 @@ final class Vault: ObservableObject {
                 localServices.append(service)
             }
         }
-        localServices.sort { ($0.address, $0.port) < ($1.address, $1.port) }
+        // Numeric octet order, matching the results list: sorting addresses as
+        // strings puts 10.0.0.100 above 10.0.0.41.
+        localServices.sort {
+            $0.address == $1.address
+                ? $0.port < $1.port
+                : LANResultsMerge.addressLess($0.address, $1.address)
+        }
         record { try persistLocalServices() }
     }
 
