@@ -284,6 +284,83 @@ final class Vault: ObservableObject {
         record { try persistKnownHosts() }
     }
 
+    // MARK: - Sync
+
+    /// Everything a sync provider should carry.
+    ///
+    /// A key whose private half cannot leave the device (Secure Enclave) is
+    /// included as metadata with `deviceOnly` set rather than omitted: the
+    /// other device should be able to *see* that the key exists and why it is
+    /// not usable there, instead of silently missing a host's credential.
+    func snapshot() -> VaultSnapshot {
+        let synced = identities.map { identity -> SyncedIdentity in
+            let pem = identity.isSecureEnclave ? nil : try? exportPrivateKey(for: identity)
+            return SyncedIdentity(
+                identity: identity,
+                privateKeyPEM: pem,
+                deviceOnly: identity.isSecureEnclave || pem == nil
+            )
+        }
+        return VaultSnapshot(
+            identities: synced,
+            hosts: hosts,
+            knownHosts: knownHosts,
+            updatedAt: Date()
+        )
+    }
+
+    /// Adopt a merged snapshot.
+    ///
+    /// Identities keep their original ids — a host references its key by id,
+    /// so minting new ones on import would quietly unlink every host. A key
+    /// that arrives without private material (device-only on the machine that
+    /// exported it) is recorded as metadata only; attempting to use it will
+    /// fail with "identity not found", which is the honest outcome.
+    @discardableResult
+    func apply(_ snapshot: VaultSnapshot) throws -> (keysAdded: Int, hostsAdded: Int, pinsAdded: Int) {
+        var keysAdded = 0
+        for incoming in snapshot.identities {
+            if identities.contains(where: { $0.id == incoming.identity.id }) { continue }
+            if let pem = incoming.privateKeyPEM {
+                let parsed = try OpenSSHKeyFile.parse(pem: pem)
+                try store(parsed.material, for: incoming.identity)
+            }
+            identities.append(incoming.identity)
+            keysAdded += 1
+        }
+
+        var hostsAdded = 0
+        for host in snapshot.hosts where !hosts.contains(where: { $0.id == host.id }) {
+            hosts.append(host)
+            hostsAdded += 1
+        }
+
+        var pinsAdded = 0
+        for pin in snapshot.knownHosts where !knownHosts.contains(where: { $0.id == pin.id }) {
+            knownHosts.append(pin)
+            pinsAdded += 1
+        }
+
+        try persistIdentities()
+        try persistHosts()
+        try persistKnownHosts()
+        return (keysAdded, hostsAdded, pinsAdded)
+    }
+
+    /// Re-store an identity's secret with different Keychain attributes.
+    /// Used by the iCloud provider to move a key between the local and the
+    /// synchronised Keychain without the user regenerating it.
+    func restoreProtection(for identity: Identity, syncToICloud: Bool) throws {
+        guard !identity.isSecureEnclave else { return }
+        let material = try privateKey(for: identity)
+        guard let index = identities.firstIndex(where: { $0.id == identity.id }) else {
+            throw VaultError.identityNotFound
+        }
+        identities[index].syncsToICloud = syncToICloud
+        try store(material, for: identities[index])
+        try persistIdentities()
+    }
+
     // MARK: - Preview / first-run seed
 
     /// An in-memory vault with sample hosts, for SwiftUI previews and as the
