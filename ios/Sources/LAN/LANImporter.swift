@@ -13,10 +13,15 @@ enum LANImporter {
         /// Already in the vault; `lastSeen` was bumped and nothing else.
         var hostsRefreshed = 0
         var servicesAdded = 0
+        /// Nothing was written because there was no username to write.
+        var refusedNoUsername = false
 
         var isEmpty: Bool { hostsAdded == 0 && hostsRefreshed == 0 && servicesAdded == 0 }
 
         var description: String {
+            if refusedNoUsername {
+                return "Set a username first — a host saved without one can't be connected to."
+            }
             guard !isEmpty else { return "Nothing to import." }
             var parts: [String] = []
             if hostsAdded > 0 { parts.append("\(hostsAdded) SSH host\(hostsAdded == 1 ? "" : "s")") }
@@ -38,6 +43,13 @@ enum LANImporter {
         term: String,
         aliases: [String: String] = [:]
     ) -> Summary {
+        // The rule lives here rather than in the view: a scan learns an
+        // address and a port and never a username, and a host saved without
+        // one cannot be connected to at all. The field in the UI is a
+        // convenience; this is the guarantee.
+        let user = LANImporter.resolveUsername(username, in: vault)
+        guard !user.isEmpty else { return Summary(refusedNoUsername: true) }
+
         var summary = Summary()
         var services: [LocalService] = []
 
@@ -60,7 +72,7 @@ enum LANImporter {
                     alias: alias,
                     hostname: result.address,
                     port: open.port,
-                    username: username,
+                    username: user,
                     group: Host.localGroup,
                     tags: result.bonjourServices.isEmpty ? [] : ["bonjour"],
                     term: term,
@@ -92,6 +104,14 @@ enum LANImporter {
         vault.upsertLocalServices(services)
         summary.servicesAdded = vault.localServices.count - before
         return summary
+    }
+
+    /// The username typed into the scan screen, else the one most of the
+    /// saved hosts already use — almost every homelab logs in the same way
+    /// everywhere, and that guess beats writing a host nobody can connect to.
+    static func resolveUsername(_ typed: String, in vault: Vault) -> String {
+        let trimmed = typed.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? (vault.commonUsername ?? "") : trimmed
     }
 
     /// Edited alias, else Bonjour or reverse-DNS name, else the address.

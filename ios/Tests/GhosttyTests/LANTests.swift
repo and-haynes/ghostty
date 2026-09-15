@@ -568,6 +568,52 @@ final class LANImportTests: XCTestCase {
         XCTAssertEqual(offered.first?.hostname, "10.0.0.41")
     }
 
+    func testImportBorrowsTheUsernameTheVaultAlreadyUses() {
+        vault.upsert(Host(alias: "noether", hostname: "10.0.0.81", username: "andy"))
+
+        // No username typed: the scan screen's field is a convenience, and an
+        // empty one must not produce hosts nobody can connect to.
+        let summary = LANImporter.import(
+            results(), into: vault, username: "   ", term: "xterm-256color"
+        )
+
+        XCTAssertFalse(summary.refusedNoUsername)
+        XCTAssertEqual(summary.hostsAdded, 1)
+        XCTAssertEqual(vault.localHosts.first?.username, "andy")
+    }
+
+    func testImportRefusesWhenThereIsNoUsernameAnywhere() {
+        let summary = LANImporter.import(
+            results(), into: vault, username: "", term: "xterm-256color"
+        )
+
+        XCTAssertTrue(summary.refusedNoUsername)
+        XCTAssertTrue(summary.description.hasPrefix("Set a username first"))
+        XCTAssertTrue(vault.hosts.isEmpty, "nothing is written")
+        XCTAssertTrue(vault.localServices.isEmpty)
+    }
+
+    func testTypedUsernameBeatsTheVaultDefault() {
+        vault.upsert(Host(alias: "noether", hostname: "10.0.0.81", username: "andy"))
+        LANImporter.import(results(), into: vault, username: " root ", term: "xterm-256color")
+        XCTAssertEqual(vault.localHosts.first?.username, "root")
+    }
+
+    func testTheCommonUsernameIsTheDefaultForScannedHosts() {
+        // A scan learns an address and a port and never a username, and a
+        // host saved without one cannot be connected to.
+        XCTAssertNil(vault.commonUsername)
+        vault.upsert(Host(alias: "a", hostname: "10.0.0.81", username: "andy"))
+        vault.upsert(Host(alias: "b", hostname: "10.0.0.41", username: "andy"))
+        vault.upsert(Host(alias: "c", hostname: "10.0.0.42", username: "root"))
+        XCTAssertEqual(vault.commonUsername, "andy")
+    }
+
+    func testCommonUsernameIgnoresBlanks() {
+        vault.upsert(Host(alias: "a", hostname: "10.0.0.81", username: ""))
+        XCTAssertNil(vault.commonUsername)
+    }
+
     func testSummaryText() {
         XCTAssertEqual(LANImporter.Summary().description, "Nothing to import.")
         XCTAssertEqual(

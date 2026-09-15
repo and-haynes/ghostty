@@ -22,12 +22,15 @@ struct LANScanView: View {
     @State private var customPorts = ""
     @State private var username = ""
     @State private var showingLowPortWarning = false
+    @FocusState private var focusedField: Field?
     @State private var importSummary: String?
     @State private var showingPinResults = false
 
     init(vault: Vault) {
         _pinner = StateObject(wrappedValue: HostKeyPinner(vault: vault))
     }
+
+    private enum Field: Hashable { case customPorts, username }
 
     enum PortMode: String, CaseIterable, Identifiable {
         case curated, custom, allLow
@@ -56,6 +59,7 @@ struct LANScanView: View {
             }
             results
         }
+        .scrollDismissesKeyboard(.immediately)
         .navigationTitle("Scan local network")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -67,7 +71,12 @@ struct LANScanView: View {
                 }
             }
         }
-        .onAppear { username = settings.lastUsername }
+        .onAppear {
+            guard username.isEmpty else { return }
+            username = settings.lastUsername.isEmpty
+                ? (vault.commonUsername ?? "")
+                : settings.lastUsername
+        }
         .alert("Scan all ports 1–1024?", isPresented: $showingLowPortWarning) {
             Button("Cancel", role: .cancel) {}
             Button("Scan anyway") { runScan(ports: PortCatalog.lowPorts) }
@@ -99,9 +108,13 @@ struct LANScanView: View {
                 TextField("22, 8080, 9090", text: $customPorts)
                     .keyboardType(.numbersAndPunctuation)
                     .autocorrectionDisabled()
+                    .focused($focusedField, equals: .customPorts)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
             }
 
             LabeledField("Username", text: $username, placeholder: "andy", autocorrect: false)
+                .focused($focusedField, equals: .username)
 
             if let subnet = scanner.subnetDescription {
                 HStack {
@@ -205,6 +218,9 @@ struct LANScanView: View {
     // MARK: - Actions
 
     private func startScan() {
+        // Put the keyboard away: a scan is something you watch, and a numeric
+        // keypad covers most of the results list on a phone.
+        focusedField = nil
         settings.lastUsername = username
         switch portMode {
         case .curated:
@@ -227,13 +243,13 @@ struct LANScanView: View {
     private func importSelected() {
         let results = chosenHosts
         guard !results.isEmpty else { return }
-        let user = username.trimmingCharacters(in: .whitespaces)
+        let user = LANImporter.resolveUsername(username, in: vault)
         if !user.isEmpty { settings.lastUsername = user }
 
         let summary = LANImporter.import(
             results,
             into: vault,
-            username: user.isEmpty ? settings.lastUsername : user,
+            username: user,
             term: settings.defaultTerm,
             aliases: aliases
         )

@@ -336,6 +336,21 @@ final class Vault: ObservableObject {
     /// Hosts imported from a LAN scan.
     var localHosts: [Host] { hosts.filter { $0.group == Host.localGroup } }
 
+    /// The username that appears on most saved hosts.
+    ///
+    /// A scan learns an address and a port and never a username, and a host
+    /// saved without one cannot be connected to at all. Almost every homelab
+    /// uses the same login everywhere, so the one already on file is a far
+    /// better guess than an empty field.
+    var commonUsername: String? {
+        var counts: [String: Int] = [:]
+        for host in hosts where !host.username.isEmpty {
+            counts[host.username, default: 0] += 1
+        }
+        // Ties broken by name so the answer does not change between launches.
+        return counts.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
+    }
+
     /// Record that a scan saw this host, without disturbing anything else.
     func markSeen(_ host: Host, at date: Date = Date()) {
         guard let index = hosts.firstIndex(where: { $0.id == host.id }) else { return }
