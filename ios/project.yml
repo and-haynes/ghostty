@@ -93,15 +93,31 @@ targets:
         # twice ("Redefinition of module 'GhosttyVt'").
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
 
+  GhosttyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/GhosttyUITests
+    dependencies:
+      - target: Ghostty
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.morton.ghostty.uitests
+        TEST_TARGET_NAME: Ghostty
+        GENERATE_INFOPLIST_FILE: YES
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+
 schemes:
   Ghostty:
     build:
       targets:
         Ghostty: all
         GhosttyTests: [test]
+        GhosttyUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - GhosttyTests
+        - GhosttyUITests

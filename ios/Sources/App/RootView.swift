@@ -35,6 +35,7 @@ struct RootView: View {
         }
         .onAppear {
             sessions.configure(vault: vault, settings: settings)
+            ScreenshotSeed.apply(to: vault)
         }
     }
 }
