@@ -77,6 +77,23 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        LANScanView(vault: vault)
+                    } label: {
+                        Label("Scan local network", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    if !vault.localServices.isEmpty {
+                        NavigationLink("Local services (\(vault.localServices.count))") {
+                            LocalServicesView()
+                        }
+                    }
+                } header: {
+                    Text("Local network")
+                } footer: {
+                    Text("Finds machines on this Wi-Fi by knocking on common TCP ports and listening for Bonjour. SSH ports can be imported as hosts; everything else is kept for reference. iOS will ask for Local Network permission the first time.")
+                }
+
+                Section {
                     NavigationLink("Known hosts (\(vault.knownHosts.count))") { KnownHostsView() }
                 } header: {
                     Text("Diagnostics")

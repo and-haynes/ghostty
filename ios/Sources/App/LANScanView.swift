@@ -1,0 +1,328 @@
+import SwiftUI
+
+/// Scan the local network for things worth connecting to.
+///
+/// This is a convenience, not a security tool: it knocks on a curated list of
+/// TCP ports and reports what answered. It never authenticates — the closest
+/// it comes is reading the SSH identification banner every server sends
+/// unprompted the moment you connect.
+struct LANScanView: View {
+    @EnvironmentObject private var vault: Vault
+    @EnvironmentObject private var settings: AppSettings
+    @StateObject private var scanner = LANScanner()
+    @StateObject private var pinner: HostKeyPinner
+
+    @State private var selection: Set<String> = []
+    @State private var portMode: PortMode = .curated
+    @State private var customPorts = ""
+    @State private var username = ""
+    @State private var showingLowPortWarning = false
+    @State private var importSummary: String?
+    @State private var showingPinResults = false
+
+    init(vault: Vault) {
+        _pinner = StateObject(wrappedValue: HostKeyPinner(vault: vault))
+    }
+
+    enum PortMode: String, CaseIterable, Identifiable {
+        case curated, custom, allLow
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .curated: return "Common"
+            case .custom: return "Custom"
+            case .allLow: return "1–1024"
+            }
+        }
+    }
+
+    var body: some View {
+        List {
+            controls
+            if let warning = scanner.warning {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let error = scanner.lastError {
+                Label(error, systemImage: "xmark.octagon")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            results
+        }
+        .navigationTitle("Scan local network")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if scanner.isScanning {
+                    Button("Cancel") { scanner.cancel() }
+                } else {
+                    Button("Scan") { startScan() }
+                }
+            }
+        }
+        .onAppear { username = settings.lastUsername }
+        .alert("Scan all ports 1–1024?", isPresented: $showingLowPortWarning) {
+            Button("Cancel", role: .cancel) {}
+            Button("Scan anyway") { runScan(ports: PortCatalog.lowPorts) }
+        } message: {
+            Text("That is 1024 probes per host instead of 18. On a /24 it is a few minutes and a lot of radio time.")
+        }
+        .alert("Imported", isPresented: .init(
+            get: { importSummary != nil },
+            set: { if !$0 { importSummary = nil } }
+        ), presenting: importSummary) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { Text($0) }
+        .sheet(isPresented: $showingPinResults) {
+            PinResultsView(pinner: pinner)
+        }
+    }
+
+    // MARK: - Controls
+
+    @ViewBuilder
+    private var controls: some View {
+        Section {
+            Picker("Ports", selection: $portMode) {
+                ForEach(PortMode.allCases) { mode in Text(mode.title).tag(mode) }
+            }
+            .pickerStyle(.segmented)
+
+            if portMode == .custom {
+                TextField("22, 8080, 9090", text: $customPorts)
+                    .keyboardType(.numbersAndPunctuation)
+                    .autocorrectionDisabled()
+            }
+
+            LabeledField("Username", text: $username, placeholder: "andy", autocorrect: false)
+
+            if scanner.isScanning {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: scanner.progress)
+                    Text(scanner.statusLine).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Scan")
+        } footer: {
+            Text("Knocks on TCP ports and reads the SSH banner servers send unprompted. Nothing is authenticated and nothing is written to any host.")
+        }
+    }
+
+    // MARK: - Results
+
+    @ViewBuilder
+    private var results: some View {
+        if scanner.hosts.isEmpty {
+            if !scanner.isScanning {
+                Section {
+                    Text("No results yet. Tap Scan.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            Section {
+                ForEach(scanner.hosts) { host in
+                    LANHostRow(host: host, selected: selection.contains(host.id)) {
+                        toggle(host)
+                    }
+                }
+            } header: {
+                Text("\(scanner.hosts.count) host\(scanner.hosts.count == 1 ? "" : "s")")
+            }
+
+            Section {
+                Button("Import \(selection.isEmpty ? "all" : "\(selection.count) selected")", systemImage: "square.and.arrow.down") {
+                    importSelected()
+                }
+                Button("Pin host keys", systemImage: "lock.shield") {
+                    pinSelected()
+                }
+                .disabled(pinner.isRunning || sshHostsToPin.isEmpty)
+                if pinner.isRunning {
+                    ProgressView(value: pinner.progress)
+                }
+            } footer: {
+                Text("Importing turns SSH ports into hosts in the \"Local\" group; everything else is kept as a local service for reference. Pinning connects far enough to read each host key and records it — authentication is never attempted.")
+            }
+        }
+    }
+
+    private var chosenHosts: [LANHost] {
+        selection.isEmpty ? scanner.hosts : scanner.hosts.filter { selection.contains($0.id) }
+    }
+
+    private var sshHostsToPin: [Host] {
+        // Pin what is already in the vault, so the fingerprints recorded are
+        // for hosts the user actually kept.
+        vault.localHosts.filter { host in
+            chosenHosts.contains { $0.address == host.hostname }
+        }
+    }
+
+    private func toggle(_ host: LANHost) {
+        Haptics.shared.fire(.selectionChip)
+        if selection.contains(host.id) { selection.remove(host.id) } else { selection.insert(host.id) }
+    }
+
+    // MARK: - Actions
+
+    private func startScan() {
+        settings.lastUsername = username
+        switch portMode {
+        case .curated:
+            runScan(ports: PortCatalog.curated.map(\.port))
+        case .custom:
+            let ports = customPorts
+                .split(whereSeparator: { ",; ".contains($0) })
+                .compactMap { Int($0) }
+                .filter { (1...65535).contains($0) }
+            runScan(ports: ports.isEmpty ? PortCatalog.curated.map(\.port) : ports)
+        case .allLow:
+            showingLowPortWarning = true
+        }
+    }
+
+    private func runScan(ports: [Int]) {
+        Task { await scanner.scan(ports: ports) }
+    }
+
+    private func importSelected() {
+        let hosts = chosenHosts
+        guard !hosts.isEmpty else { return }
+        let user = username.isEmpty ? settings.lastUsername : username
+
+        var addedHosts = 0
+        var addedServices: [LocalService] = []
+
+        for lan in hosts {
+            for port in lan.sshPorts {
+                // Re-importing after a re-scan should refresh, not duplicate.
+                let existing = vault.hosts.first {
+                    $0.hostname == lan.address && $0.port == port.port
+                }
+                if let existing {
+                    vault.markSeen(existing)
+                    continue
+                }
+                var host = Host(
+                    alias: lan.hostname ?? lan.address,
+                    hostname: lan.address,
+                    port: port.port,
+                    username: user,
+                    group: Host.localGroup,
+                    tags: lan.bonjourServices.isEmpty ? [] : ["bonjour"],
+                    notes: port.banner ?? "",
+                    lastSeen: lan.lastSeen
+                )
+                host.term = settings.defaultTerm
+                vault.upsert(host)
+                addedHosts += 1
+            }
+
+            for port in lan.otherPorts {
+                addedServices.append(LocalService(
+                    alias: lan.hostname ?? lan.address,
+                    address: lan.address,
+                    port: port.port,
+                    serviceType: port.serviceName,
+                    scheme: port.guess.scheme,
+                    lastSeen: lan.lastSeen
+                ))
+            }
+        }
+
+        vault.upsertLocalServices(addedServices)
+        settings.lastUsername = user
+        Haptics.shared.fire(.syncSucceeded)
+        importSummary = "\(addedHosts) SSH host\(addedHosts == 1 ? "" : "s") and "
+            + "\(addedServices.count) local service\(addedServices.count == 1 ? "" : "s")."
+    }
+
+    private func pinSelected() {
+        let hosts = sshHostsToPin
+        showingPinResults = true
+        Task { await pinner.pin(hosts) }
+    }
+}
+
+private struct LANHostRow: View {
+    let host: LANHost
+    let selected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(host.displayName).font(.body.weight(.medium))
+                        if host.hasSSH {
+                            Image(systemName: "terminal").font(.caption2).foregroundStyle(.green)
+                        }
+                    }
+                    if host.hostname != nil {
+                        Text(host.address).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    }
+                    Text(host.summary)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if let banner = host.sshPorts.compactMap(\.banner).first {
+                        Text(banner).font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PinResultsView: View {
+    @ObservedObject var pinner: HostKeyPinner
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(pinner.results) { result in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(result.id).font(.body.monospaced())
+                        switch result.outcome {
+                        case .pinned(let fingerprint, let keyType):
+                            Label("pinned · \(keyType)", systemImage: "checkmark.seal")
+                                .font(.caption).foregroundStyle(.green)
+                            Text(fingerprint).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                        case .unchanged(let fingerprint):
+                            Label("already pinned", systemImage: "checkmark")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(fingerprint).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                        case .changed(let expected, let presented):
+                            Label("KEY CHANGED — not re-pinned", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption.weight(.bold)).foregroundStyle(.red)
+                            Text("pinned:    \(expected)").font(.caption2.monospaced())
+                            Text("presented: \(presented)").font(.caption2.monospaced())
+                        case .unreachable(let reason):
+                            Label(reason, systemImage: "wifi.slash")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .navigationTitle(pinner.isRunning ? "Pinning…" : pinner.summary)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }.disabled(pinner.isRunning)
+                }
+            }
+        }
+    }
+}
