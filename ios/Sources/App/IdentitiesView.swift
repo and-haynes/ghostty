@@ -28,7 +28,10 @@ struct IdentitiesView: View {
                             Button { exporting = identity } label: { IdentityRow(identity: identity) }
                                 .buttonStyle(.plain)
                                 .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) { pendingDelete = identity } label: {
+                                    Button(role: .destructive) {
+                                        Haptics.shared.fire(.listAction)
+                                        pendingDelete = identity
+                                    } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
                                 }
@@ -202,8 +205,10 @@ struct GenerateIdentityView: View {
                 requiresBiometrics: requiresBiometrics,
                 syncToICloud: syncToICloud
             )
+            Haptics.shared.fire(.keyGenerated)
         } catch {
             errorMessage = error.localizedDescription
+            Haptics.shared.fire(.syncFailed)
         }
     }
 }
