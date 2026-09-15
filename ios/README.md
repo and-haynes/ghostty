@@ -497,7 +497,9 @@ exactly like an empty network; a unit test asserts the plist and the code agree.
 ## Screenshots
 
 Captured by `Tests/GhosttyUITests/ScreenshotTests.swift` driving the real app
-on an iPhone 17 simulator.
+on an iPhone 17 simulator. 11 and 12 are a genuine sweep of the homelab's
+`10.0.0.0/24` — the simulator shares the host Mac's network, so the addresses,
+open ports and SSH banners in them are real.
 
 | | |
 |---|---|
