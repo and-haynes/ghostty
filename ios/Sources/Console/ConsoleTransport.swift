@@ -8,8 +8,17 @@ import Foundation
 protocol ConsoleCommandHost: AnyObject {
     var consoleHosts: [Host] { get }
     var consoleIdentities: [Identity] { get }
+    /// Non-SSH things a LAN scan found. Listed by `hosts` so the console is a
+    /// complete picture of the network, not just the parts it can connect to.
+    var consoleLocalServices: [LocalService] { get }
     /// Open a session for this request. Returns the line to print back.
     func consoleOpenSSH(_ request: ConsoleSSHRequest) -> String
+}
+
+extension ConsoleCommandHost {
+    /// Defaulted so a test double (and any host that never scans) does not
+    /// have to care that local services exist.
+    var consoleLocalServices: [LocalService] { [] }
 }
 
 /// A parsed `ssh` invocation.
@@ -247,7 +256,7 @@ final class ConsoleTransport: TerminalTransport {
         emit("""
         \u{1b}[1mConsole commands\u{1b}[0m\r\n\
           \u{1b}[1mssh\u{1b}[0m [user@]host [-p port] [-i key]   connect, opening a session\r\n\
-          \u{1b}[1mhosts\u{1b}[0m                              list saved hosts\r\n\
+          \u{1b}[1mhosts\u{1b}[0m                              list saved hosts and local services\r\n\
           \u{1b}[1mkeys\u{1b}[0m                               list keys in the vault\r\n\
           \u{1b}[1mecho\u{1b}[0m <text>                        print text\r\n\
           \u{1b}[1mdemo\u{1b}[0m                               the colour and style banner\r\n\
@@ -261,15 +270,29 @@ final class ConsoleTransport: TerminalTransport {
 
     private func emitHosts() {
         let hosts = commandHost?.consoleHosts ?? []
-        guard !hosts.isEmpty else {
-            emit("No saved hosts. Add one in the Hosts tab, or just `ssh user@host`.\r\n")
+        let services = commandHost?.consoleLocalServices ?? []
+        guard !hosts.isEmpty || !services.isEmpty else {
+            emit("No saved hosts. Add one in the Hosts tab, scan the local network in\r\n"
+                 + "Settings, or just `ssh user@host`.\r\n")
             return
         }
-        let width = hosts.map(\.displayName.count).max() ?? 8
+
+        let width = max(hosts.map(\.displayName.count).max() ?? 8, 8)
         for host in hosts.sorted(by: { $0.displayName < $1.displayName }) {
-            let name = host.displayName.padding(toLength: max(width, 8), withPad: " ", startingAt: 0)
+            let name = host.displayName.padding(toLength: width, withPad: " ", startingAt: 0)
             emit("  \u{1b}[1m\(name)\u{1b}[0m  \(host.username)@\(host.destination)"
                  + (host.group.isEmpty ? "" : "  \u{1b}[2m\(host.group)\u{1b}[0m") + "\r\n")
+        }
+
+        // Listed but not connectable: the console's `ssh` cannot speak HTTP or
+        // SMB, and saying so beats a name that silently does nothing.
+        guard !services.isEmpty else { return }
+        let serviceWidth = max(services.map(\.alias.count).max() ?? 8, 8)
+        emit("\r\n  \u{1b}[2mlocal services (not connectable from here)\u{1b}[0m\r\n")
+        for service in services.sorted(by: { $0.urlString < $1.urlString }) {
+            let name = service.alias.padding(toLength: serviceWidth, withPad: " ", startingAt: 0)
+            emit("  \u{1b}[1m\(name)\u{1b}[0m  \(service.urlString)"
+                 + "  \u{1b}[2m\(service.serviceType)\u{1b}[0m\r\n")
         }
     }
 

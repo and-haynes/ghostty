@@ -174,6 +174,7 @@ extension SessionManager: HostKeyPrompter {
 extension SessionManager: ConsoleCommandHost {
     var consoleHosts: [Host] { vault?.hosts ?? [] }
     var consoleIdentities: [Identity] { vault?.identities ?? [] }
+    var consoleLocalServices: [LocalService] { vault?.localServices ?? [] }
 
     /// Resolve `ssh` against the vault and open a session.
     ///
@@ -184,8 +185,15 @@ extension SessionManager: ConsoleCommandHost {
         guard let vault else { return "the vault isn't ready yet" }
 
         let needle = request.host.lowercased()
+        // The last two clauses are what makes a scanned host usable: reverse
+        // DNS hands back "noether.lan" and Bonjour "noether", so the alias a
+        // LAN import saved is rarely the bare name someone types. Matching the
+        // first label of either is the difference between `ssh noether` and
+        // having to remember which form the scan happened to learn.
         let saved = vault.hosts.first { $0.alias.lowercased() == needle }
             ?? vault.hosts.first { $0.hostname.lowercased() == needle }
+            ?? vault.hosts.first { SessionManager.firstLabel(of: $0.alias) == needle }
+            ?? vault.hosts.first { SessionManager.firstLabel(of: $0.hostname) == needle }
 
         var host = saved ?? Host(
             alias: "",
@@ -225,5 +233,13 @@ extension SessionManager: ConsoleCommandHost {
         } catch {
             return error.localizedDescription
         }
+    }
+
+    /// "noether.lan" -> "noether". An IPv4 literal has no label worth taking,
+    /// so it is left whole rather than becoming its first octet.
+    nonisolated static func firstLabel(of name: String) -> String {
+        let lowered = name.lowercased()
+        guard LANSubnet.parse(lowered) == nil else { return lowered }
+        return String(lowered.prefix(while: { $0 != "." }))
     }
 }
