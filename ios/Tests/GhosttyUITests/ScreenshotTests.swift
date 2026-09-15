@@ -445,6 +445,178 @@ final class ScreenshotTests: XCTestCase {
             .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08))
             .tap()
         Thread.sleep(forTimeInterval: 0.5)
+
+    /// Screenshots 11–12: a real sweep of whatever subnet this machine is on,
+    /// and the Local group the import produces.
+    ///
+    /// Its own test rather than a step in the big one. It runs a genuine scan —
+    /// there is no fixture that would prove the sockets work — on a three-port
+    /// list rather than all eighteen, because a UI test should not take a
+    /// minute and a half, and it wants a clean screen: `XCUIScreen.screenshot`
+    /// captures the display, so anything Safari left lying around from a
+    /// previous run would be photographed instead of the app.
+    func testCaptureLANScan() throws {
+        XCUIApplication(bundleIdentifier: "com.apple.mobilesafari").terminate()
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-ghostty-seed"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Hosts"].waitForExistence(timeout: 30), "the app should launch")
+
+        selectTab(app, named: "Settings", expecting: "Settings")
+
+        let scanLink = app.buttons["Scan local network"]
+        for _ in 0..<6 where !scanLink.exists { scrollDown(app) }
+        guard scanLink.waitForExistence(timeout: 10) else {
+            reportHierarchy(app, step: "Scan local network link")
+            return XCTFail("Settings should offer a local network scan")
+        }
+        scanLink.tap()
+        guard app.navigationBars["Scan local network"].waitForExistence(timeout: 10) else {
+            reportHierarchy(app, step: "LAN scan screen")
+            return XCTFail("the scan screen should open")
+        }
+
+        // Custom ports keep the sweep to three knocks per address.
+        if app.buttons["Custom"].exists {
+            app.buttons["Custom"].tap()
+            let field = app.textFields["22, 8080, 9090"]
+            if field.waitForExistence(timeout: 5) {
+                field.tap()
+                app.typeText("22,80,443")
+            }
+        }
+
+        // Dismissing the keyboard is the app's job now, but the test types
+        // into a field and then taps a toolbar button, so make sure the tap
+        // lands rather than being eaten by a keyboard that is still up.
+        if app.keyboards.count > 0 { app.typeText("\n") }
+        // The seeded vault's hosts all use "andy", so the username field
+        // arrives pre-filled from the vault rather than empty.
+        app.buttons["Scan"].firstMatch.tap()
+        // iOS asks for Local Network permission the first time. The alert
+        // belongs to springboard, not to us.
+        allowLocalNetwork(app)
+
+        // Wait for the scan to finish rather than for a fixed interval: a /24
+        // on three ports is ~15 s here but slower on a busy machine.
+        let cancel = app.buttons["Cancel"]
+        let deadline = Date().addingTimeInterval(120)
+        while cancel.exists, Date() < deadline {
+            Thread.sleep(forTimeInterval: 2.0)
+        }
+        Thread.sleep(forTimeInterval: 1.0)
+        // Scroll the results into view: the controls take most of a phone
+        // screen, and a screenshot of the form proves nothing.
+        scrollDown(app)
+        Thread.sleep(forTimeInterval: 1.0)
+        capture(app, named: "11-lan-scan")
+
+        // The scan is the point; a screenshot of an empty list would pass
+        // while proving nothing about the sockets.
+        let hostCount = app.staticTexts.allElementsBoundByIndex
+            .map { $0.label.lowercased() }
+            .first { $0.hasSuffix(" hosts") || $0 == "1 host" } ?? "no host count on screen"
+        print("ghostty-screenshots: the scan reported \(hostCount)")
+        XCTAssertTrue(
+            app.navigationBars["Scan local network"].exists,
+            "the app should still be in the foreground after a sweep"
+        )
+
+        // Import everything the sweep found, then look at the Local group.
+        // The actions sit below the whole results list, which on a busy
+        // network is several screens long.
+        let importButton = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Import'")
+        ).firstMatch
+        for _ in 0..<40 where !importButton.exists { scrollDown(app) }
+        if importButton.waitForExistence(timeout: 5) {
+            importButton.tap()
+            if app.alerts["Imported"].waitForExistence(timeout: 10) {
+                app.alerts["Imported"].buttons["OK"].tap()
+            }
+        } else {
+            reportHierarchy(app, step: "Import button (the scan may have found nothing)")
+        }
+
+        selectTab(app, named: "Hosts", expecting: "Hosts")
+        for _ in 0..<10 where !app.staticTexts["Local"].exists { scrollDown(app) }
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertEqual(app.state, .runningForeground, "Ghostty should still be in front")
+        capture(app, named: "12-local-hosts")
+
+        // An imported host with no username cannot be connected to, so the
+        // subtitle must never start with "@".
+        let rows = app.staticTexts.allElementsBoundByIndex
+            .map(\.label)
+            .filter { $0.contains("@10.0.0.") }
+        print("ghostty-screenshots: imported rows \(rows.prefix(4))")
+        XCTAssertFalse(
+            rows.contains { $0.hasPrefix("@") },
+            "every imported host should carry a username"
+        )
+        XCTAssertTrue(captured.contains("11-lan-scan"))
+        XCTAssertTrue(captured.contains("12-local-hosts"))
+        print("ghostty-screenshots: wrote \(captured.joined(separator: ", ")) to \(outputDirectory.path)")
+    }
+
+    /// Tap through the system's Local Network permission alert, wherever it
+    /// decides to live.
+    private func allowLocalNetwork(_ app: XCUIApplication) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for _ in 0..<10 {
+            for host in [springboard, app] {
+                let alert = host.alerts.firstMatch
+                if alert.exists {
+                    for label in ["Allow", "OK"] where alert.buttons[label].exists {
+                        alert.buttons[label].tap()
+                        return
+                    }
+                }
+            }
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+    }
+
+    /// Scroll by dragging inside the screen rather than `swipeUp()`.
+    ///
+    /// A swipe that starts near the bottom edge is the home gesture: a run
+    /// that scrolled a long results list with `swipeUp(velocity: .fast)`
+    /// backgrounded the app, opened the app switcher, and photographed a
+    /// different application entirely.
+    private func scrollDown(_ app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+            .press(
+                forDuration: 0.05,
+                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            )
+        Thread.sleep(forTimeInterval: 0.3)
+    }
+
+    /// Switch tabs and *check that it worked*.
+    ///
+    /// iOS 26's floating tab bar reports button frames that overlap by ~10pt,
+    /// and a plain `.tap()` on the element intermittently activates the
+    /// neighbouring tab — which is how a screenshot run ends up photographing
+    /// the Keys tab and calling it Settings. The fallback taps a fraction of
+    /// the bar's own width instead, which is unambiguous.
+    private func selectTab(_ app: XCUIApplication, named name: String, expecting title: String) {
+        let tab = app.tabBars.buttons[name]
+        if tab.waitForExistence(timeout: 10) { tab.tap() }
+        if app.navigationBars[title].waitForExistence(timeout: 5) { return }
+
+        let labels = app.tabBars.buttons.allElementsBoundByIndex.map(\.label)
+        guard let index = labels.firstIndex(of: name) else {
+            reportHierarchy(app, step: "the \(name) tab")
+            return
+        }
+        let dx = (Double(index) + 0.5) / Double(labels.count)
+        app.tabBars.firstMatch
+            .coordinate(withNormalizedOffset: CGVector(dx: dx, dy: 0.5))
+            .tap()
+        if !app.navigationBars[title].waitForExistence(timeout: 10) {
+            reportHierarchy(app, step: "the \(name) tab after a coordinate tap")
+        }
     }
 
     private func focusTerminal(_ app: XCUIApplication) {
