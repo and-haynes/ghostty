@@ -22,7 +22,8 @@ a settings toggle.
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ SwiftUI app  (Sources/App)                                   │
-│   Hosts · Keys · Sessions · Settings · TOFU + password alerts │
+│   Hosts · Sessions · Console · Keys · Settings                │
+│   TOFU + password alerts · Sync settings · Haptics            │
 └───────────────┬──────────────────────────────┬───────────────┘
                 │                              │
 ┌───────────────▼──────────────┐  ┌────────────▼───────────────┐
@@ -41,10 +42,19 @@ a settings toggle.
  ┌─────────▼──┐  ┌───▼────────────────┐        │
  │ GhosttyVT  │  │ TerminalTransport  │        │
  │ (C wrapper)│  ├────────────────────┤        │
- │            │  │ SSHTransport ──────┼────────┘
- │  libghostty│  │ DemoTransport      │   (keys, passwords,
+ │            │  │ SSHTransport ──────┼────────┤
+ │  libghostty│  │ ConsoleTransport   │   (keys, passwords,
  │  -vt .a    │  └────────┬───────────┘    host-key pins)
- └────────────┘           │
+ └────────────┘           │                     │
+                          │          ┌──────────▼──────────────┐
+                          │          │ VaultSyncEngine         │
+                          │          │  newest-wins merge      │
+                          │          ├─────────────────────────┤
+                          │          │ iCloud Keychain         │
+                          │          │ Bitwarden / Vaultwarden │
+                          │          │ 1Password Connect       │
+                          │          │ Encrypted bundle        │
+                          │          └─────────────────────────┘
                   ┌───────▼────────┐
                   │ SSHSession     │  swift-nio-ssh
                   │  pty-req/shell │  Curve25519 · P-256/384/521
@@ -123,6 +133,114 @@ anyway" button, because that button is how pinning stops meaning anything. The
 pin can be removed explicitly from **Keys ▸ Known hosts**, which is the
 supported way to handle a re-imaged box.
 
+## Vault sync
+
+Four providers behind one `VaultSyncProvider` protocol. Providers push and pull
+whole snapshots and know nothing about conflict resolution — `VaultSyncEngine`
+owns the single policy so every provider behaves identically and the rule
+itself is testable without a network.
+
+**The conflict rule is newest-wins at snapshot granularity.** Records are
+unioned by id; where the same id exists on both sides, the newer snapshot's
+copy is kept. This is deliberately coarse: `Identity`, `Host` and `KnownHost`
+carry no per-record modification time, and inventing one would mean rewriting
+records the user never touched. Additions and deletions on either side always
+survive; editing *the same host* on two devices between syncs loses the older
+edit. Per-record timestamps are a TODO.
+
+**Secure Enclave keys are never synced by any provider.** They travel as
+metadata with a `device-only` flag so the other device can see the key exists
+and why it is unusable there, rather than silently missing a host's credential.
+
+| Provider | What it needs | Where things go |
+|---|---|---|
+| **iCloud Keychain** | Nothing — the device's iCloud account | Private keys already replicate as `kSecAttrSynchronizable` Keychain items; this adds the non-secret half (hosts, pins, key metadata) as one synchronised Keychain item |
+| **Bitwarden / Vaultwarden** | Server URL + email/master password (+ TOTP), or API key + master password | Keys as native **SSH key items** (cipher type 5); hosts and pins as one secure note, `Ghostty iOS hosts` |
+| **1Password Connect** | Connect server URL + token | Keys as **SSH_KEY** items; hosts and pins as a **SECURE_NOTE**, `Ghostty iOS hosts` |
+| **Encrypted bundle** | A passphrase | One AES-GCM file you move yourself, via the share sheet or Files |
+
+The Bitwarden client does the real client-side crypto: `prelogin` for KDF
+parameters, PBKDF2-SHA256 master key, HKDF stretch, unwrap of the user
+symmetric key, and AES-256-CBC + HMAC-SHA256 `EncString` type 2 with the MAC
+verified in constant time *before* decryption. The master password never leaves
+the device; only a one-iteration hash of it is sent, exactly as the official
+clients do.
+
+**1Password has no on-device API for third-party apps** — no extension, no
+local vault access, nothing an iOS app may call. Connect is a REST server you
+host yourself, and it is the only supported route. This is stated in the app's
+own Settings help text too, so nobody wastes an afternoon looking for the
+integration that does not exist.
+
+The encrypted bundle is the generic path for everything else (KeePass, Proton
+Pass, …): one file, one passphrase, moved by hand.
+
+## The Console tab
+
+iOS has no shell, so the Console is not one — it is the app's own command line,
+running on the same libghostty-vt emulator an SSH session uses. It is a
+permanent tab because its real job is `ssh`:
+
+```
+ssh [user@]host [-p port] [-i identity-name]
+```
+
+The host resolves against the vault by alias or hostname, so `ssh noether`
+inherits that host's key, TERM, font size and startup command; an unrecognised
+name connects ad-hoc without being saved. Also `help`, `hosts`, `keys`, `echo`,
+`demo`, `history` and `clear`. Unknown commands print a hint rather than an
+error.
+
+## The key bar
+
+`[Esc Tab Ctrl Alt] | [arrows · symbols · Home/End/PgUp/PgDn · Fn] | [paste ⌨]`
+
+The keys you reach for without looking are pinned; everything else scrolls
+between them, so muscle memory survives a scroll position. **Ctrl and Alt are
+tri-state**: one tap arms for the next key, a second tap within 400 ms locks
+until tapped off (a phone gives you one thumb, so "hold ctrl and press c" has
+to become two taps, and a lock is what makes `ctrl-a ctrl-d` bearable). Arrows
+are one cluster with press-and-hold auto-repeat. F1–F12 hide behind an `Fn`
+toggle so they do not push everything useful off the end.
+
+The keyboard toggle uses the real `keyboard.chevron.compact.down` symbol, and
+when the bar is collapsed a floating `keyboard` button appears bottom-right of
+the terminal — the way back is always one tap away.
+
+## The selection helper
+
+Long-press to start a selection and a suggestion fades in: translucent bands
+behind the **input** (the current command line) and the **output** (the
+previous command's), plus `Input · Output · Both` chips near your finger.
+Tapping a chip sets that exact selection; your own drag keeps working
+untouched, because the chips are sibling views rather than a gesture and a
+finger already owned by the drag stays owned by it.
+
+With OSC 133 shell integration the ranges come from real prompt marks and the
+chips use `ghostty_terminal_select_line` / `ghostty_terminal_select_output`,
+which trim the prompt itself and take a wrapped command whole. Without it the
+input is the cursor row and the output is everything above it in the viewport —
+a suggestion that is sometimes approximate is far more useful than one that
+only appears for people who have configured their shell.
+
+## Haptics
+
+One `Haptics` service, named by *event* rather than by generator, because the
+mapping from "a connection came up" to "success notification" is a design
+decision that belongs in one place. Impact (light/medium/rigid/soft), selection
+and notification generators are kept warm ahead of gestures; the terminal bell
+gets its own CoreHaptics pattern so `BEL` is distinguishable from every other
+buzz the app makes.
+
+**Settings ▸ Input ▸ Haptics** is Off / Subtle / Normal / **Rich**, default
+Normal. Subtle keeps only events that happened on their own (connections,
+errors, the bell) and scales impacts down; Normal adds keys, modifiers and the
+keyboard toggle; Rich adds arrow repeats and per-cell selection ticks.
+
+Three rules the call sites do not have to think about: one buzz per event (a
+rate limiter collapses bursts), nothing while the app is backgrounded, and
+nothing at all when it is off. Scrolling terminal output is deliberately silent.
+
 ## Feature matrix
 
 ### Done
@@ -134,7 +252,11 @@ supported way to handle a re-imaged box.
 | Cursor | Block / bar / underline / hollow, visibility and blink state from the terminal |
 | Themes | Ghostty default, Catppuccin Mocha, Gruvbox Dark, Solarized Dark, Nord — applied through the terminal so OSC 4/10/11/104 still work |
 | Input | Software keyboard via `UIKeyInput`; hardware keyboard via `pressesBegan` (modifiers, arrows, Esc, F1–F12, Home/End/PgUp/PgDn) |
-| Key bar | Esc, Tab, sticky Ctrl, sticky Alt, arrows, `- / \| ~ :`, Home/End, PgUp/PgDn, Paste, hide-keyboard |
+| Key bar | Fixed Esc/Tab/Ctrl/Alt group, scrolling middle (arrow cluster with auto-repeat, symbols, Home/End/PgUp/PgDn, F1–F12 behind `Fn`), fixed paste + keyboard toggle; tri-state sticky/locked modifiers; floating keyboard button when collapsed |
+| Console | Permanent tab with `ssh`, `hosts`, `keys`, `echo`, `demo`, `history`, `help`, `clear`; resolves hosts against the vault |
+| Selection helper | Input/output bands and `Input · Output · Both` chips on long-press, OSC 133 aware with a cursor-based fallback |
+| Sync | iCloud Keychain, Bitwarden/Vaultwarden, 1Password Connect, encrypted bundle; newest-wins merge; per-provider status in Settings |
+| Haptics | Off/Subtle/Normal/Rich, ~25 mapped events, CoreHaptics bell, rate-limited, silent in the background |
 | Gestures | Pinch to resize the font, pan to scroll the viewport through scrollback, long-press to select a word and drag to extend, edit menu with Copy / Paste / Select All |
 | Paste | Bracketed-paste aware, unsafe-paste confirmation |
 | SSH | Connect, host key verification, `pty-req` (configurable TERM), `env`, `shell` or `exec`, `window-change`, clean disconnect, bounded reconnect with backoff |
@@ -149,6 +271,13 @@ supported way to handle a re-imaged box.
   terminal state) but no gesture currently forwards events to it, so programs
   that turn on mouse tracking see nothing. The seam is there; the gesture
   routing is not.
+* **Sync conflict resolution** is newest-wins per *snapshot*, not per record —
+  see the Vault sync section. Simultaneous edits to the same host on two
+  devices lose the older one.
+* **Argon2id KDF** for Bitwarden accounts and for the encrypted bundle is
+  stubbed behind a protocol with a clear error; PBKDF2 (which is what
+  Vaultwarden's default is) is the shipped path. Wiring
+  `tmthecoder/Argon2Swift` is a package addition away.
 * **Selection** — long-press-and-drag works and copies correctly. There are no
   draggable selection handles, and rectangular selection is not exposed.
 * **Curly underline** is drawn as a solid underline.
@@ -175,6 +304,8 @@ supported way to handle a re-imaged box.
 * **IME / marked text.** `UIKeyInput` is implemented, full `UITextInput` is
   not, so CJK composition does not work.
 * **Split panes and tabs** — one terminal per session, sessions in a list.
+* **Sync deletions do not propagate.** A record removed on one device
+  reappears from the other's copy; only additions and edits travel.
 
 ## Screenshots
 
@@ -187,8 +318,12 @@ on an iPhone 17 simulator.
 | Hosts, grouped, with per-host accent colours | A key generated in-app, with its `authorized_keys` line |
 | ![Terminal](docs/screenshots/03-terminal.png) | ![Key bar](docs/screenshots/04-terminal-keybar.png) |
 | The demo terminal: real VT rendered by libghostty-vt — bold, italic, underline, strikethrough, inverse, truecolour | Key bar above the keyboard, 256-colour chart echoed locally |
-| ![TOFU](docs/screenshots/05-tofu.png) | |
-| A real first connection to a LAN host. The fingerprint shown matches `ssh-keyscan 10.0.0.41 \| ssh-keygen -lf -` exactly. | |
+| ![TOFU](docs/screenshots/05-tofu.png) | ![Console](docs/screenshots/06-console-ssh.png) |
+| A real first connection to a LAN host. The fingerprint shown matches `ssh-keyscan 10.0.0.41 \| ssh-keygen -lf -` exactly. | The Console tab: `hosts` and `ssh`, resolved against the vault |
+| ![Key bar](docs/screenshots/07-keybar.png) | ![Keyboard toggle](docs/screenshots/08-keyboard-toggle.png) |
+| The reorganised key bar with Ctrl armed and the `Fn` row open | The floating keyboard button, shown when the bar is collapsed |
+| ![Selection helper](docs/screenshots/09-selection-helper.png) | ![Sync](docs/screenshots/10-sync-settings.png) |
+| Input/output bands and the selection chips | Sync providers in Settings |
 
 ## Toolchain
 
@@ -212,9 +347,12 @@ ios/
 ├── project.yml                 xcodegen spec
 ├── Sources/
 │   ├── GhosttyVT/              Swift wrapper over the libghostty-vt C API
-│   ├── TerminalView/           UIKit CoreText grid, key bar, transports
+│   ├── TerminalView/           UIKit CoreText grid, key bar, selection helper
+│   ├── Console/                the app's own command line
 │   ├── SSH/                    swift-nio-ssh client, TOFU, auth
 │   ├── Vault/                  identities, hosts, known hosts, Keychain
+│   ├── Sync/                   sync engine + iCloud/Bitwarden/1Password/bundle
+│   ├── Haptics/                the haptics service
 │   ├── Theme/                  colour schemes
 │   └── App/                    SwiftUI screens
 └── Tests/
@@ -222,11 +360,11 @@ ios/
     └── GhosttyUITests/         drives the app, captures the screenshots
 ```
 
-### A note on the demo terminal
+### Testing against a real Vaultwarden
 
-`DemoTransport` is a tiny local fake shell reachable from **Settings ▸ Open
-demo terminal**. It is a test fixture that ships: it is the only way to
-exercise the emulator, the renderer, the gestures and the key bar on a
-simulator with no server and no credentials. Everything it emits is real VT,
-interpreted by libghostty-vt exactly as it would interpret bytes off a socket.
-Type `help` for its command list.
+The homelab runs Vaultwarden at `https://vault.lan` (health: `/alive`). Its
+unauthenticated `POST /identity/accounts/prelogin` was used to confirm the
+real-world shape of the KDF response used in the test fixtures. There is **no
+account available to this repo**, so the Bitwarden crypto is tested against
+published test vectors and recorded `prelogin` / `sync` fixtures rather than a
+live login. Nothing in the test suite touches the network.
