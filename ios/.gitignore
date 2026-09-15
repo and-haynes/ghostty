@@ -1,0 +1,11 @@
+# The libghostty-vt xcframework is a build artifact, not source.
+# Produce it with ./build-libvt.sh (see README.md).
+Frameworks/
+
+# Xcode / SwiftPM
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+DerivedData/
+.build/
