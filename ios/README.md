@@ -331,6 +331,89 @@ Three rules the call sites do not have to think about: one buzz per event (a
 rate limiter collapses bursts), nothing while the app is backgrounded, and
 nothing at all when it is off. Scrolling terminal output is deliberately silent.
 
+## Experimental additions
+
+On the `experimental` branch only. Everything below is real and tested, but it
+has not been through the same amount of use as the rest of the app.
+
+### The LAN scanner
+
+**Settings ▸ Local network ▸ Scan local network.** A terminal whose far end is
+always a network is a terminal that starts with the question "what is on this
+network?", and answering it by hand — `ssh-keyscan`, a spreadsheet, retyping
+the same username eighteen times — is the tedious part of adopting a homelab.
+
+The sweep has three sources, reconciled into one result set by
+`LANResultsMerge`:
+
+| Source | What it contributes |
+|---|---|
+| TCP sweep (`NWConnection`) | open ports on machines that advertise nothing |
+| Bonjour (`NWBrowser`) | names, and service types, from machines that introduce themselves |
+| Reverse DNS (`getnameinfo`) | names, asked only about addresses that already answered |
+
+The subnet comes from `getifaddrs` on `en0` — Wi-Fi on a phone, the host Mac's
+primary interface in the simulator, which is why a simulator scan sees the real
+LAN. It is **clamped to a /22** and anything wider than a /24 says so out loud:
+a /16 is 65 000 addresses times eighteen ports, which is not a scan.
+
+The port list is curated rather than exhaustive — 22, 2222, 22222, 830, 80,
+443, 8006, 8080, 8443, 8096, 8123, 9090, 3000, 5000, 32400, 445, 5900, 3389 —
+with a custom-ports field and an "all ports 1–1024" option behind a
+confirmation, because that option is 1024 probes per host instead of 18. Probes
+run 64 at a time with a one-second timeout and a cancel button, **port-major**:
+the whole subnet is knocked on 22 before anything is knocked on 3389, so every
+SSH host appears in the first few seconds of a scan that takes a minute.
+
+Two decisions worth stating:
+
+* **`.waiting` counts as closed.** `NWConnection` parks in `.waiting` on
+  `ECONNREFUSED` intending to retry. For a scanner a refusal is a final answer,
+  and waiting out the retry would triple the sweep.
+* **Reading the SSH banner is not authentication.** Ports on the SSH list read
+  the `SSH-2.0-…` identification line every server volunteers before either
+  side has spoken. It is stripped to printable ASCII before it reaches a list
+  row or a host's notes, so a hostile server cannot smuggle an escape sequence
+  into the UI.
+
+### Import, pinning, and the Local group
+
+Results are multi-selectable with the alias editable inline — the moment of
+import is the only moment anyone knows which of six anonymous 10.0.0.x boxes is
+the NAS. **SSH ports become vault hosts** in a `Local` group, with the username
+defaulting to the last one used and the banner kept as the host's note.
+Everything else becomes a **local service**: a reference list with an address
+you can copy, rather than a launcher with opinions, because the app cannot
+speak SMB or RDP and pretending otherwise would be worse.
+
+Re-importing after a re-scan refreshes rather than duplicates, matched on
+**endpoint rather than alias** — the alias is the one thing the user is free to
+change, so keying on it would turn a rename into a duplicate. A host you had
+already saved by hand is refreshed and otherwise left alone: finding a machine
+you already configured is not a reason to configure it again.
+
+**One button pins host keys** for everything imported. It is the ordinary
+connection path — the session hands the key to the vault's TOFU check and the
+prompter says yes — so a key pinned here is pinned exactly as one accepted by
+hand, and a *mismatched* key still never reaches a prompter at all. Auth is
+offered as `none` and is expected to fail; the key exchange completes first,
+which is all we wanted. Running it again after a re-scan is how a changed key
+gets flagged, and the old pin is never overwritten.
+
+The **Local group** in the Hosts tab sorts last whatever its name, so a sweep
+of a /24 cannot push hand-configured hosts off the screen. Every row carries a
+last-seen that turns orange when the last knock went unanswered, and the header
+has a **Re-scan** that knocks on exactly those endpoints rather than sweeping
+the subnet again. The Console's `hosts` lists local services under the saved
+hosts, marked as not connectable from there, and its `ssh` resolves a scanned
+host by the first label of its alias or hostname as well as the whole thing —
+reverse DNS hands back `noether.lan` and Bonjour `noether`, and `ssh noether`
+should work either way.
+
+`NSLocalNetworkUsageDescription` and six `NSBonjourServices` types are declared
+in `Info.plist`. iOS returns nothing at all for an undeclared type, which looks
+exactly like an empty network; a unit test asserts the plist and the code agree.
+
 ## Feature matrix
 
 ### Done
@@ -357,6 +440,8 @@ nothing at all when it is off. Scrolling terminal output is deliberately silent.
 | 1Password | One-tap **Import key from clipboard** when the clipboard holds a key, an in-app guide for getting one out of 1Password, and the clipboard wiped once the key is in the Keychain |
 | Vault | Hosts with alias/group/tags/colour/TERM/font size/startup command/notes, known-hosts list with forget |
 | Tests | 321 unit tests (including NIST, RFC 4231 and RFC 8439 crypto vectors, key-format fixtures from `ssh-keygen`/`openssl`, and integration tests against a real `sshd`) + UI tests that drive the real app and capture the screenshots below |
+| LAN scan (`experimental`) | Subnet sweep + Bonjour + reverse DNS, SSH banners, import to a `Local` group and a local-services list, one-button host-key pinning, re-scan from the Hosts tab |
+| Tests | 321 unit tests on `ios` (NIST, RFC 4231 and RFC 8439 crypto vectors, key-format fixtures from `ssh-keygen`/`openssl`, integration tests against local `sshd`s) plus the LAN scanner's tests on `experimental`, and UI tests that drive the real app and capture the screenshots below |
 
 ### Partial
 
@@ -430,6 +515,8 @@ on an iPhone 17 simulator.
 | The edit menu on a stationary long press — Paste, Select All, Select Word, and the input/output selections behind the chevron | The session status line above the key bar, which is the sole occupant of the row above the keyboard |
 | ![Clipboard import](docs/screenshots/15-clipboard-import.png) | ![Clipboard offer](docs/screenshots/15-clipboard-import-offer.png) |
 | A key pasted from the clipboard: format recognised, name prefilled, one tap from 1Password | The Keys tab offering the import when the clipboard holds something |
+| ![LAN scan](docs/screenshots/11-lan-scan.png) | ![Local hosts](docs/screenshots/12-local-hosts.png) |
+| A real sweep of 10.0.0.0/24 from the simulator, with open ports and SSH banners (`experimental`) | The Local group the import produces, with last-seen and a re-scan (`experimental`) |
 
 ## Toolchain
 
@@ -458,6 +545,7 @@ ios/
 │   ├── SSH/                    swift-nio-ssh client, TOFU, auth
 │   ├── Vault/                  identities, hosts, known hosts, Keychain
 │   ├── Sync/                   sync engine + iCloud/Bitwarden/1Password/bundle
+│   ├── LAN/                    subnet sweep, Bonjour, import, host-key pinning
 │   ├── Haptics/                the haptics service
 │   ├── Theme/                  colour schemes
 │   └── App/                    SwiftUI screens
