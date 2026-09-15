@@ -145,6 +145,9 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
     /// Command to run instead of an interactive shell, if any.
     var startupCommand: String?
     var notes: String
+    /// When a LAN scan last saw this host answer. Optional so hosts written
+    /// before scanning existed still decode.
+    var lastSeen: Date?
 
     var keychainPasswordAccount: String { "host-password.\(id.uuidString)" }
 
@@ -162,7 +165,8 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         term: String = "xterm-256color",
         fontSize: Double? = nil,
         startupCommand: String? = nil,
-        notes: String = ""
+        notes: String = "",
+        lastSeen: Date? = nil
     ) {
         self.id = id
         self.alias = alias
@@ -178,7 +182,11 @@ struct Host: Identifiable, Codable, Hashable, Sendable {
         self.fontSize = fontSize
         self.startupCommand = startupCommand
         self.notes = notes
+        self.lastSeen = lastSeen
     }
+
+    /// Group used by hosts imported from a LAN scan.
+    static let localGroup = "Local"
 
     var displayName: String { alias.isEmpty ? "\(username)@\(hostname)" : alias }
     var destination: String { port == 22 ? hostname : "\(hostname):\(port)" }

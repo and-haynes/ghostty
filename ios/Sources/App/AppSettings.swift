@@ -11,6 +11,7 @@ final class AppSettings: ObservableObject {
         static let keyBar = "settings.keyBarEnabled"
         static let iCloudSync = "settings.iCloudSyncDefault"
         static let scrollbackWarning = "settings.confirmUnsafePaste"
+        static let lastUsername = "settings.lastUsername"
     }
 
     private let defaults: UserDefaults
@@ -23,6 +24,9 @@ final class AppSettings: ObservableObject {
     /// key between the local and the synced Keychain.
     @Published var iCloudSyncDefault: Bool { didSet { defaults.set(iCloudSyncDefault, forKey: Key.iCloudSync) } }
     @Published var confirmUnsafePaste: Bool { didSet { defaults.set(confirmUnsafePaste, forKey: Key.scrollbackWarning) } }
+    /// Default username for hosts imported from a LAN scan — almost always the
+    /// same one across a homelab, and retyping it per host is tedious.
+    @Published var lastUsername: String { didSet { defaults.set(lastUsername, forKey: Key.lastUsername) } }
 
     var theme: TerminalTheme { .named(themeName) }
 
@@ -38,5 +42,6 @@ final class AppSettings: ObservableObject {
         keyBarEnabled = defaults.object(forKey: Key.keyBar) as? Bool ?? true
         iCloudSyncDefault = defaults.object(forKey: Key.iCloudSync) as? Bool ?? false
         confirmUnsafePaste = defaults.object(forKey: Key.scrollbackWarning) as? Bool ?? true
+        lastUsername = defaults.string(forKey: Key.lastUsername) ?? ""
     }
 }

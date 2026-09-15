@@ -12,6 +12,9 @@ final class Vault: ObservableObject {
     @Published private(set) var identities: [Identity] = []
     @Published private(set) var hosts: [Host] = []
     @Published private(set) var knownHosts: [KnownHost] = []
+    /// Non-SSH things a LAN scan found: web UIs, shares, screens. Kept for
+    /// reference and for the console's `open`, not for connecting to.
+    @Published private(set) var localServices: [LocalService] = []
 
     /// The last non-fatal failure, for the UI to surface. Metadata writes and
     /// best-effort secret cleanups report here instead of throwing, so a
@@ -24,6 +27,7 @@ final class Vault: ObservableObject {
     private var identitiesURL: URL { directory.appendingPathComponent("identities.json") }
     private var hostsURL: URL { directory.appendingPathComponent("hosts.json") }
     private var knownHostsURL: URL { directory.appendingPathComponent("known_hosts.json") }
+    private var localServicesURL: URL { directory.appendingPathComponent("local_services.json") }
 
     // MARK: - Lifecycle
 
@@ -34,6 +38,7 @@ final class Vault: ObservableObject {
         self.identities = load([Identity].self, from: identitiesURL) ?? []
         self.hosts = load([Host].self, from: hostsURL) ?? []
         self.knownHosts = load([KnownHost].self, from: knownHostsURL) ?? []
+        self.localServices = load([LocalService].self, from: localServicesURL) ?? []
     }
 
     private static func defaultDirectory() -> URL {
@@ -291,6 +296,47 @@ final class Vault: ObservableObject {
         record { try persistKnownHosts() }
     }
 
+    // MARK: - Local services
+
+    /// Merge scanned services in by (address, port) so a re-scan refreshes
+    /// rather than duplicating, and a user-edited alias survives.
+    func upsertLocalServices(_ incoming: [LocalService]) {
+        for service in incoming {
+            if let index = localServices.firstIndex(where: {
+                $0.address == service.address && $0.port == service.port
+            }) {
+                localServices[index].lastSeen = service.lastSeen
+                localServices[index].serviceType = service.serviceType
+                localServices[index].scheme = service.scheme
+            } else {
+                localServices.append(service)
+            }
+        }
+        localServices.sort { ($0.address, $0.port) < ($1.address, $1.port) }
+        record { try persistLocalServices() }
+    }
+
+    func renameLocalService(_ service: LocalService, to alias: String) {
+        guard let index = localServices.firstIndex(where: { $0.id == service.id }) else { return }
+        localServices[index].alias = alias
+        record { try persistLocalServices() }
+    }
+
+    func deleteLocalService(_ service: LocalService) {
+        localServices.removeAll { $0.id == service.id }
+        record { try persistLocalServices() }
+    }
+
+    /// Hosts imported from a LAN scan.
+    var localHosts: [Host] { hosts.filter { $0.group == Host.localGroup } }
+
+    /// Record that a scan saw this host, without disturbing anything else.
+    func markSeen(_ host: Host, at date: Date = Date()) {
+        guard let index = hosts.firstIndex(where: { $0.id == host.id }) else { return }
+        hosts[index].lastSeen = date
+        record { try persistHosts() }
+    }
+
     // MARK: - Sync
 
     /// Everything a sync provider should carry.
@@ -463,6 +509,7 @@ final class Vault: ObservableObject {
     private func persistIdentities() throws { try write(identities, to: identitiesURL) }
     private func persistHosts() throws { try write(hosts, to: hostsURL) }
     private func persistKnownHosts() throws { try write(knownHosts, to: knownHostsURL) }
+    private func persistLocalServices() throws { try write(localServices, to: localServicesURL) }
 
     private func write<T: Encodable>(_ value: T, to url: URL) throws {
         let encoder = JSONEncoder()
