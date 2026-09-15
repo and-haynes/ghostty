@@ -50,7 +50,33 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Ghostty uses Face ID to unlock SSH private keys stored in the on-device vault.</string>
 	<key>UIFileSharingEnabled</key>
-	<false/>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.morton.ghostty.vault-bundle</string>
+			<key>UTTypeDescription</key>
+			<string>Ghostty vault bundle</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ghosttyvault</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-ghostty-vault</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 	<key>UIRequiresFullScreen</key>
 	<false/>
 </dict>

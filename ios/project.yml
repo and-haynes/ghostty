@@ -68,6 +68,8 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: "1,2"    # iPhone + iPad
         SUPPORTS_MACCATALYST: NO
+        # Exported vault bundles land in Documents; without file sharing the
+        # user cannot reach the file they just asked the app to write.
         # The xcframework ships ios-arm64 and ios-arm64-simulator only, so an
         # x86_64 simulator slice has nothing to link against. Excluding it is
         # honest; the alternative is a link failure on every generic build.

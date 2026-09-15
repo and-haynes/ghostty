@@ -3,8 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var vault: Vault
-
-    var onOpenDemo: () -> Void
+    @EnvironmentObject private var sync: VaultSyncEngine
+    @ObservedObject private var haptics = Haptics.shared
 
     var body: some View {
         NavigationStack {
@@ -35,10 +35,37 @@ struct SettingsView: View {
                 Section {
                     Toggle("Key bar above keyboard", isOn: $settings.keyBarEnabled)
                     Toggle("Confirm risky pastes", isOn: $settings.confirmUnsafePaste)
+                    Picker("Haptics", selection: $haptics.level) {
+                        ForEach(HapticLevel.allCases) { level in
+                            Text(level.title).tag(level)
+                        }
+                    }
+                    Text(haptics.level.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } header: {
                     Text("Input")
                 } footer: {
                     Text("A paste containing a line break runs the command as soon as it lands; the confirmation is the only thing between a mis-tap and a command you did not mean to run.")
+                }
+
+                Section {
+                    ForEach(VaultSyncProviderKind.allCases) { kind in
+                        NavigationLink {
+                            SyncProviderView(kind: kind)
+                        } label: {
+                            SyncProviderRow(kind: kind, status: sync.status(kind), busy: sync.isBusy(kind))
+                        }
+                    }
+                    if !sync.connectedKinds.isEmpty {
+                        Button("Sync all now", systemImage: "arrow.triangle.2.circlepath") {
+                            Task { await sync.syncAllConnected() }
+                        }
+                    }
+                } header: {
+                    Text("Sync")
+                } footer: {
+                    Text("Providers hold a copy of hosts, pinned host keys and exportable private keys. Conflicts resolve newest-wins. Secure Enclave keys never leave this device and are marked device-only wherever they appear.")
                 }
 
                 Section {
@@ -51,11 +78,10 @@ struct SettingsView: View {
 
                 Section {
                     NavigationLink("Known hosts (\(vault.knownHosts.count))") { KnownHostsView() }
-                    Button("Open demo terminal", systemImage: "terminal") { onOpenDemo() }
                 } header: {
                     Text("Diagnostics")
                 } footer: {
-                    Text("The demo terminal runs libghostty-vt against a local fake shell — no network, no credentials. It is how the renderer and key bar are exercised without a server.")
+                    Text("The Console tab runs libghostty-vt against the app's own command interpreter — no network, no credentials. It is where the renderer and key bar can be exercised without a server.")
                 }
 
                 Section("About") {
