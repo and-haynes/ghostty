@@ -47,6 +47,17 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Ghostty scans this Wi-Fi network to find machines you can SSH into, and the web UIs and shares running alongside them. It only connects to ports to see whether something answers; nothing is logged in to and nothing is sent to any server.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_ssh._tcp</string>
+		<string>_sftp-ssh._tcp</string>
+		<string>_http._tcp</string>
+		<string>_https._tcp</string>
+		<string>_smb._tcp</string>
+		<string>_workstation._tcp</string>
+	</array>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Ghostty uses Face ID to unlock SSH private keys stored in the on-device vault.</string>
 	<key>UIFileSharingEnabled</key>
