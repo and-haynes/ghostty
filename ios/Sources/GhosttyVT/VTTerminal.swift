@@ -331,3 +331,37 @@ private let vtTitleChangedTrampoline: @convention(c) (
     let terminal = Unmanaged<VTTerminal>.fromOpaque(userdata).takeUnretainedValue()
     terminal.onTitleChanged?(terminal.title ?? "")
 }
+
+// MARK: - Colour scheme
+
+extension VTTerminal {
+    /// Install a colour scheme.
+    ///
+    /// These are the *defaults*; a program is still free to override them
+    /// with OSC 10/11/4, which is why they go through the terminal rather
+    /// than being applied at draw time. Doing it at draw time would make
+    /// "reset colours" (OSC 104/110/111) impossible to honour.
+    func applyTheme(foreground: VTColor, background: VTColor, cursor: VTColor, palette: [VTColor]) {
+        var fg = GhosttyColorRgb(r: foreground.r, g: foreground.g, b: foreground.b)
+        var bg = GhosttyColorRgb(r: background.r, g: background.g, b: background.b)
+        var cur = GhosttyColorRgb(r: cursor.r, g: cursor.g, b: cursor.b)
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg)
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg)
+        ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cur)
+
+        guard palette.count >= 256 else { return }
+        var raw = palette.prefix(256).map { GhosttyColorRgb(r: $0.r, g: $0.g, b: $0.b) }
+        _ = raw.withUnsafeMutableBufferPointer { buf in
+            ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, buf.baseAddress)
+        }
+    }
+
+    func applyTheme(_ theme: TerminalTheme) {
+        applyTheme(
+            foreground: theme.foreground,
+            background: theme.background,
+            cursor: theme.cursor,
+            palette: theme.palette
+        )
+    }
+}
