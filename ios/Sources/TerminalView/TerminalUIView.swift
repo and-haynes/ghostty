@@ -41,6 +41,16 @@ final class TerminalUIView: UIView {
     /// Called when a paste is requested but the clipboard text looks unsafe;
     /// the host UI decides whether to confirm.
     var onUnsafePaste: ((String, @escaping (Bool) -> Void) -> Void)?
+    /// Whether to show the accessory key bar. Someone with a hardware keyboard
+    /// does not need it and it costs 46 points of terminal.
+    var keyBarEnabled = true {
+        didSet {
+            guard keyBarEnabled != oldValue, isFirstResponder else { return }
+            // inputAccessoryView is only re-read when the responder chain is
+            // rebuilt, so bounce first-responder status to apply the change.
+            reloadInputViews()
+        }
+    }
 
     private(set) var fontSet = TerminalFontSet(size: 12)
     private var model = VTFrame()
@@ -121,16 +131,22 @@ final class TerminalUIView: UIView {
     private func syncGeometry(force: Bool = false) {
         guard let session, bounds.width > 0, bounds.height > 0 else { return }
         let size = gridSize
-        if force || size.cols != session.cols || size.rows != session.rows {
-            session.resize(
-                cols: size.cols,
-                rows: size.rows,
-                cellWidth: fontSet.cellWidth,
-                cellHeight: fontSet.cellHeight
-            )
-            lines = []
-            setNeedsDisplay()
-        }
+        guard force || size.cols != session.cols || size.rows != session.rows else { return }
+
+        // Drop the cached screen *before* resizing, not after. `session.resize`
+        // invalidates the render state and calls back into `pump()`
+        // synchronously, which refills `lines`; clearing afterwards threw that
+        // fresh frame away and left the view blank until the next byte
+        // arrived. That is exactly the bug that made a freshly opened terminal
+        // show nothing but its background colour.
+        lines = []
+        setNeedsDisplay()
+        session.resize(
+            cols: size.cols,
+            rows: size.rows,
+            cellWidth: fontSet.cellWidth,
+            cellHeight: fontSet.cellHeight
+        )
     }
 
     func setFontSize(_ size: CGFloat) {
@@ -140,10 +156,8 @@ final class TerminalUIView: UIView {
         fontSet = TerminalFontSet(size: clamped)
         session.fontSize = clamped
         onFontSizeChanged?(clamped)
-        lines = []
         syncGeometry(force: true)
         session.invalidateRender()
-        setNeedsDisplay()
     }
 
     private func rowRect(_ y: Int) -> CGRect {
@@ -213,9 +227,6 @@ final class TerminalUIView: UIView {
         ctx.setFillColor(model.background.cgColor)
         ctx.fill(rect)
         guard !lines.isEmpty else { return }
-
-        // CoreText draws glyphs y-up; the UIView context is y-down.
-        ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
 
         let first = max(0, Int((rect.minY - padding.height) / fontSet.cellHeight))
         let last = min(lines.count - 1, Int((rect.maxY - padding.height) / fontSet.cellHeight))
@@ -288,9 +299,11 @@ final class TerminalUIView: UIView {
                 var glyph = CGGlyph()
                 if CTFontGetGlyphsForCharacters(font, &units, &glyph, 1), glyph != 0 {
                     let key = GlyphBucketKey(font: font, color: fg)
+                    // y is 0 because glyphs are drawn inside a per-row context
+                    // flipped about the baseline; see drawGlyphs.
                     buckets[key, default: GlyphBucket()].append(
                         glyph: glyph,
-                        at: CGPoint(x: originX, y: baseline)
+                        at: CGPoint(x: originX, y: 0)
                     )
                     continue
                 }
@@ -298,14 +311,7 @@ final class TerminalUIView: UIView {
             complex.append((cell.text, x, font, fg))
         }
 
-        for (key, bucket) in buckets {
-            ctx.setFillColor(key.color.cgColor)
-            bucket.draw(font: key.font, in: ctx)
-        }
-
-        for item in complex {
-            drawComplexGlyph(item.text, font: item.font, color: item.color, column: item.x, baseline: baseline, in: ctx)
-        }
+        drawGlyphs(buckets: buckets, complex: complex, baseline: baseline, in: ctx)
 
         // Pass 3: decorations.
         for (x, cell) in row.cells.enumerated() {
@@ -339,6 +345,45 @@ final class TerminalUIView: UIView {
                 ctx.setFillColor(colors.fg.cgColor)
                 ctx.fill(CGRect(x: originX, y: top, width: width, height: fontSet.underlineThickness))
             }
+        }
+    }
+
+    /// Draw a row's glyphs.
+    ///
+    /// CoreText glyph positions are in *text* space, which the text matrix maps
+    /// into user space. A text matrix that flips y therefore flips the
+    /// positions too and throws every glyph off the top of the view — which is
+    /// exactly what it did before this was written this way. The reliable form
+    /// is to leave the text matrix alone and flip the context itself about the
+    /// baseline, so glyphs sit at y = 0 in a y-up space.
+    private func drawGlyphs(
+        buckets: [GlyphBucketKey: GlyphBucket],
+        complex: [(text: String, x: Int, font: CTFont, color: VTColor)],
+        baseline: CGFloat,
+        in ctx: CGContext
+    ) {
+        guard !buckets.isEmpty || !complex.isEmpty else { return }
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+
+        ctx.textMatrix = .identity
+        ctx.translateBy(x: 0, y: baseline)
+        ctx.scaleBy(x: 1, y: -1)
+
+        for (key, bucket) in buckets {
+            ctx.setFillColor(key.color.cgColor)
+            bucket.draw(font: key.font, in: ctx)
+        }
+
+        for item in complex {
+            let attributed = NSAttributedString(string: item.text, attributes: [
+                .font: item.font,
+                .foregroundColor: UIColor(cgColor: item.color.cgColor),
+                .ligature: 0,
+            ])
+            let line = CTLineCreateWithAttributedString(attributed)
+            ctx.textPosition = CGPoint(x: padding.width + CGFloat(item.x) * fontSet.cellWidth, y: 0)
+            CTLineDraw(line, ctx)
         }
     }
 
@@ -383,13 +428,19 @@ final class TerminalUIView: UIView {
         // Multi-codepoint grapheme clusters (emoji, combining marks) need real
         // shaping; CTLine handles font fallback too, which bare glyph lookup
         // does not.
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        ctx.textMatrix = .identity
+        ctx.translateBy(x: 0, y: baseline)
+        ctx.scaleBy(x: 1, y: -1)
+
         let attributed = NSAttributedString(string: text, attributes: [
             .font: font,
             .foregroundColor: UIColor(cgColor: color.cgColor),
             .ligature: 0,
         ])
         let line = CTLineCreateWithAttributedString(attributed)
-        ctx.textPosition = CGPoint(x: padding.width + CGFloat(column) * fontSet.cellWidth, y: baseline)
+        ctx.textPosition = CGPoint(x: padding.width + CGFloat(column) * fontSet.cellWidth, y: 0)
         CTLineDraw(line, ctx)
     }
 
@@ -410,7 +461,6 @@ final class TerminalUIView: UIView {
             if cursor.y < lines.count, cursor.x < lines[cursor.y].cells.count {
                 let cell = lines[cursor.y].cells[cursor.x]
                 if !cell.text.isEmpty {
-                    ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
                     drawComplexGlyph(
                         cell.text,
                         font: fontSet.font(bold: cell.bold, italic: cell.italic),
@@ -540,13 +590,13 @@ final class TerminalUIView: UIView {
 
     @objc func pasteFromClipboard() {
         guard let session, let text = UIPasteboard.general.string, !text.isEmpty else { return }
-        guard session.pasteIsSafe(text) else {
-            // A paste containing a newline runs whatever precedes it the moment
-            // it lands. Ask first.
-            if let onUnsafePaste {
-                onUnsafePaste(text) { [weak session] confirmed in
-                    if confirmed { session?.paste(text) }
-                }
+        // A paste containing a newline runs whatever precedes it the moment it
+        // lands, so ask first — unless the user has turned the confirmation
+        // off, in which case no handler is installed and we paste as asked
+        // rather than silently doing nothing.
+        if !session.pasteIsSafe(text), let onUnsafePaste {
+            onUnsafePaste(text) { [weak session] confirmed in
+                if confirmed { session?.paste(text) }
             }
             return
         }

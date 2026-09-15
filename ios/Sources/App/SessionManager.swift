@@ -83,6 +83,12 @@ final class SessionManager: ObservableObject {
     private func append(_ session: TerminalSession) {
         sessions.append(session)
         selectedID = session.id
+        // Start immediately rather than waiting for the terminal view to
+        // appear. Tapping a host should begin the handshake — including the
+        // host key prompt — even if the user stays on the list; deferring it
+        // made a connected-looking session sit at "Not connected" until it was
+        // opened.
+        session.startIfNeeded()
     }
 
     func close(_ session: TerminalSession) {
