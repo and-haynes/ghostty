@@ -836,7 +836,10 @@ final class BitwardenWireTests: XCTestCase {
             BitwardenSyncProvider.keyType(forPublicKeyLine: "ecdsa-sha2-nistp256 AAAA... c"),
             .p256
         )
-        XCTAssertNil(BitwardenSyncProvider.keyType(forPublicKeyLine: "ssh-rsa AAAA... c"))
+        // RSA is a key type the vault can hold now (#008A0), so a synced RSA
+        // key resolves rather than vanishing.
+        XCTAssertEqual(BitwardenSyncProvider.keyType(forPublicKeyLine: "ssh-rsa AAAA... c"), .rsa)
+        XCTAssertNil(BitwardenSyncProvider.keyType(forPublicKeyLine: "ssh-dss AAAA... c"))
     }
 }
 

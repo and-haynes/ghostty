@@ -59,13 +59,17 @@ enum SSHServerProbe {
         group: EventLoopGroup = SSHEventLoopGroupProvider.shared
     ) async throws -> SSHServerOffer {
         let promise = group.next().makePromise(of: SSHServerOffer.self)
-        let handler = ProbeHandler(promise: promise, host: host, port: port, timeout: timeout)
 
         let bootstrap = ClientBootstrap(group: group)
             .connectTimeout(timeout)
+            // The handler is built *inside* the initialiser so that only
+            // `Sendable` values cross the closure boundary; it is confined to
+            // the channel's event loop from the moment it exists.
             .channelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
-                    try channel.pipeline.syncOperations.addHandler(handler)
+                    try channel.pipeline.syncOperations.addHandler(
+                        ProbeHandler(promise: promise, host: host, port: port, timeout: timeout)
+                    )
                 }
             }
 

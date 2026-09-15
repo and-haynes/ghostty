@@ -193,6 +193,20 @@ anyway" button, because that button is how pinning stops meaning anything. The
 pin can be removed explicitly from **Keys ▸ Known hosts**, which is the
 supported way to handle a re-imaged box.
 
+## Getting a key in from 1Password
+
+1Password has no on-device API for third-party iOS apps, so the only route for a
+key stored there is to copy it across by hand. **Keys ▸ Import key from
+clipboard** makes that one tap: the button appears whenever the clipboard holds
+a string, the contents are read only when it is pressed (so the system paste
+banner appears once, and only after the user asked), the key's own comment
+prefills the name where the format has one, and the clipboard is wiped as soon
+as the key is in the Keychain — a private key left on the pasteboard is readable
+by the next app opened, and by any Mac on the same iCloud account.
+
+**Keys ▸ Import from 1Password…** is the six-step guide, and points at the
+1Password Connect sync provider for the automatic route.
+
 ## Vault sync
 
 Four providers behind one `VaultSyncProvider` protocol. Providers push and pull
@@ -339,11 +353,22 @@ nothing at all when it is off. Scrolling terminal output is deliberately silent.
 | Ciphers | `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, and `aes256/192/128-ctr` with `hmac-sha2-256` in both the plain and `-etm@openssh.com` orderings — so servers with no AEAD (routers, NAS boxes, Dropbear) are reachable |
 | Diagnostics | **Test connection** in the host editor: banner, the server's whole algorithm list, what would be negotiated, the host key fingerprint, and whether the credentials work — without opening a shell. A failed negotiation explains itself in plain language instead of `keyExchangeNegotiationFailure` |
 | Auth | Password (stored or prompted), public key: Ed25519, ECDSA P-256/384/521, **Secure Enclave P-256** |
-| Keys | Generate in-app, import unencrypted openssh-key-v1 (paste or Files), export/copy/share the public line, delete with confirmation, SHA256 fingerprints |
+| Keys | Generate in-app; import unencrypted OpenSSH, PKCS#8, PKCS#1 RSA and SEC 1 EC keys from the clipboard, a paste or Files; export/copy/share the public line, delete with confirmation, SHA256 fingerprints |
+| 1Password | One-tap **Import key from clipboard** when the clipboard holds a key, an in-app guide for getting one out of 1Password, and the clipboard wiped once the key is in the Keychain |
 | Vault | Hosts with alias/group/tags/colour/TERM/font size/startup command/notes, known-hosts list with forget |
-| Tests | 66 unit tests + a UI test that drives the real app and captures the screenshots below |
+| Tests | 321 unit tests (including NIST, RFC 4231 and RFC 8439 crypto vectors, key-format fixtures from `ssh-keygen`/`openssl`, and integration tests against a real `sshd`) + UI tests that drive the real app and capture the screenshots below |
 
 ### Partial
+
+* **RSA keys are held, not used.** An RSA key can be imported from any of the
+  four encodings, stored in the Keychain, fingerprinted and exported as an
+  `authorized_keys` line — which is most of what a key manager is for — but it
+  cannot authenticate a connection, and an RSA host key cannot be verified.
+  That is not a gap in this app: swift-nio-ssh 0.15's `NIOSSHPublicKey` and
+  `NIOSSHPrivateKey` wrap private enums with a closed set of cases, there is no
+  protocol to conform to, and `supportedServerHostKeyAlgorithms` is a hardcoded
+  `static let` of four names. Adding RSA needs a patched or vendored copy of the
+  library. The app says so on the key rather than refusing the import.
 
 * **Mouse reporting** — the encoder is wired (`VTMouseEncoder`, synced from
   terminal state) but no gesture currently forwards events to it, so programs
@@ -365,11 +390,10 @@ nothing at all when it is off. Scrolling terminal output is deliberately silent.
 
 ### TODO / not supported
 
-* **RSA client keys.** Not a gap in this app: swift-nio-ssh has no RSA client
-  key support at all. Ed25519 or ECDSA only.
 * **Encrypted private key import.** A passphrase-protected key is refused with
   the command that fixes it (`ssh-keygen -p -N "" -f key`); the bcrypt-KDF +
-  aes256-ctr path is unimplemented.
+  aes256-ctr path is unimplemented. The format is detected without the
+  passphrase, so the message is specific rather than "malformed key".
 * **keyboard-interactive auth.** swift-nio-ssh 0.15.0 exposes only
   `privateKey`, `password`, `hostBased` and `none`. A server that offers
   *only* keyboard-interactive is reported as such rather than failing vaguely.
@@ -404,6 +428,8 @@ on an iPhone 17 simulator.
 | Input/output bands and the selection chips | Sync providers in Settings |
 | ![Paste menu](docs/screenshots/14-paste-menu.png) | ![Status line and key bar](docs/screenshots/13-status-vs-keybar.png) |
 | The edit menu on a stationary long press — Paste, Select All, Select Word, and the input/output selections behind the chevron | The session status line above the key bar, which is the sole occupant of the row above the keyboard |
+| ![Clipboard import](docs/screenshots/15-clipboard-import.png) | ![Clipboard offer](docs/screenshots/15-clipboard-import-offer.png) |
+| A key pasted from the clipboard: format recognised, name prefilled, one tap from 1Password | The Keys tab offering the import when the clipboard holds something |
 
 ## Toolchain
 

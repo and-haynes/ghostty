@@ -140,8 +140,27 @@ struct SSHAlgorithmMismatch: Equatable {
         var notes: [String] = []
 
         if failures.contains(.hostKey) {
+            let certificateOnly = !offer.hostKeyAlgorithms.isEmpty
+                && offer.hostKeyAlgorithms.allSatisfy { Self.isCertificate($0) }
+            if certificateOnly {
+                notes.append(
+                    """
+                    \(hostname) only presents CA-signed host certificates. swift-nio-ssh \
+                    can parse an OpenSSH certificate but never offers a \
+                    *-cert-v01@openssh.com host key algorithm during negotiation — its \
+                    list of four is a hardcoded constant with no extension point — so the \
+                    server is never told this client would accept one.
+
+                    On the server: keep a plain Ed25519 host key alongside the \
+                    certificate (OpenSSH offers both by default; something has removed \
+                    the plain HostKey line here).
+                    """
+                )
+            }
             let rsaOnly = offer.hostKeyAlgorithms.allSatisfy { Self.isRSA($0) }
-            if rsaOnly && !offer.hostKeyAlgorithms.isEmpty {
+            if certificateOnly {
+                // Already explained above.
+            } else if rsaOnly && !offer.hostKeyAlgorithms.isEmpty {
                 notes.append(
                     """
                     \(hostname)'s only host keys are RSA. The SSH library this app is \
@@ -246,5 +265,11 @@ struct SSHAlgorithmMismatch: Equatable {
     static func isRSA(_ algorithm: String) -> Bool {
         algorithm == "ssh-rsa" || algorithm.hasPrefix("rsa-sha2-")
             || algorithm == "ssh-rsa-cert-v01@openssh.com"
+    }
+
+    /// OpenSSH host and user certificates, which swift-nio-ssh can parse but
+    /// never negotiates.
+    static func isCertificate(_ algorithm: String) -> Bool {
+        algorithm.hasSuffix("-cert-v01@openssh.com")
     }
 }

@@ -5,10 +5,23 @@ struct IdentitiesView: View {
     @EnvironmentObject private var vault: Vault
 
     @State private var showingGenerate = false
-    @State private var showingImport = false
+    @State private var showingOnePasswordGuide = false
     @State private var exporting: Identity?
     @State private var pendingDelete: Identity?
     @State private var errorMessage: String?
+    /// Whether the clipboard *might* hold a key. Only `hasStrings` is consulted
+    /// here — reading the contents raises the system paste banner, and doing
+    /// that every time this tab appears would be rude and useless.
+    @State private var clipboardMayHaveKey = false
+    /// The import sheet's payload.
+    ///
+    /// `.sheet(item:)` rather than `.sheet(isPresented:)` on purpose: when the
+    /// text and the presentation flag are set in the same update — which is
+    /// exactly what happens when the paste control hands over a key — the
+    /// `isPresented` form can build its content from the *previous* values and
+    /// present an empty sheet. Carrying the payload in the item makes that
+    /// impossible.
+    @State private var pendingImport: PendingKeyImport?
 
     var body: some View {
         NavigationStack {
@@ -19,8 +32,21 @@ struct IdentitiesView: View {
                     } description: {
                         Text("Generate a key here, then add its public line to the remote host's authorized_keys.")
                     } actions: {
-                        Button("Generate key") { showingGenerate = true }
-                            .buttonStyle(.borderedProminent)
+                        VStack(spacing: 12) {
+                            Button("Generate key") { showingGenerate = true }
+                                .buttonStyle(.borderedProminent)
+                            if clipboardMayHaveKey {
+                                HStack(spacing: 8) {
+                                    Text("Copied a key?")
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                    PasteKeyControl { text in handlePastedKey(text) }
+                                        .frame(width: 96, height: 34)
+                                }
+                            }
+                            Button("Import from 1Password…") { showingOnePasswordGuide = true }
+                                .font(.callout)
+                        }
                     }
                 } else {
                     List {
@@ -36,8 +62,25 @@ struct IdentitiesView: View {
                                     }
                                 }
                         }
+                        if clipboardMayHaveKey {
+                            Section {
+                                HStack {
+                                    Label("Import key from clipboard", systemImage: "doc.on.clipboard")
+                                    Spacer()
+                                    PasteKeyControl { text in handlePastedKey(text) }
+                                        .frame(width: 96, height: 34)
+                                }
+                            } footer: {
+                                Text("""
+                                    Copied a private key out of 1Password? One tap. The system \
+                                    Paste button hands it over without an "Allow Paste" prompt, \
+                                    and the clipboard is wiped once the key is saved.
+                                    """)
+                            }
+                        }
                         Section {
                             NavigationLink("Known hosts (\(vault.knownHosts.count))") { KnownHostsView() }
+                            Button("Import from 1Password…") { showingOnePasswordGuide = true }
                         }
                     }
                 }
@@ -50,8 +93,11 @@ struct IdentitiesView: View {
                             showingGenerate = true
                         } label: { Label("Generate…", systemImage: "wand.and.stars") }
                         Button {
-                            showingImport = true
+                            pendingImport = PendingKeyImport(pem: "", name: "", fromClipboard: false)
                         } label: { Label("Import…", systemImage: "square.and.arrow.down") }
+                        Button {
+                            showingOnePasswordGuide = true
+                        } label: { Label("Import from 1Password…", systemImage: "questionmark.circle") }
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -59,7 +105,14 @@ struct IdentitiesView: View {
                 }
             }
             .sheet(isPresented: $showingGenerate) { GenerateIdentityView() }
-            .sheet(isPresented: $showingImport) { ImportIdentityView() }
+            .sheet(item: $pendingImport) { pending in
+                ImportIdentityView(
+                    prefilledPEM: pending.pem,
+                    suggestedName: pending.name,
+                    cameFromClipboard: pending.fromClipboard
+                )
+            }
+            .sheet(isPresented: $showingOnePasswordGuide) { OnePasswordImportGuide() }
             .sheet(item: $exporting) { ExportIdentityView(identity: $0) }
             .alert("Delete key?", isPresented: .init(
                 get: { pendingDelete != nil },
@@ -76,12 +129,45 @@ struct IdentitiesView: View {
             ), presenting: errorMessage) { _ in
                 Button("OK", role: .cancel) {}
             } message: { Text($0) }
+            .onAppear { refreshClipboardOffer() }
+        }
+    }
+
+    /// Re-checked on every appearance, because the user has usually just been
+    /// in another app copying something.
+    private func refreshClipboardOffer() {
+        clipboardMayHaveKey = ClipboardKeyImport.mayHaveKey
+    }
+
+    /// Text arrived from the system paste control. Open the import sheet on it
+    /// when it is a key, and say why when it is not.
+    private func handlePastedKey(_ text: String) {
+        switch ClipboardKeyImport.classify(text) {
+        case .key(let pem, _, let suggested):
+            pendingImport = PendingKeyImport(pem: pem, name: suggested, fromClipboard: true)
+        case .encryptedKey:
+            pendingImport = PendingKeyImport(pem: text, name: "", fromClipboard: true)
+        case .notAKey:
+            errorMessage = """
+                That is not a private key. In 1Password, open the SSH key item, reveal \
+                the private key and copy that — not the public key, and not the item.
+                """
+        case .empty:
+            errorMessage = "The clipboard is empty."
         }
     }
 
     private func delete(_ identity: Identity) {
         do { try vault.deleteIdentity(identity) } catch { errorMessage = error.localizedDescription }
     }
+}
+
+/// The import sheet's payload. Identifiable so `.sheet(item:)` can carry it.
+private struct PendingKeyImport: Identifiable {
+    let id = UUID()
+    var pem: String
+    var name: String
+    var fromClipboard: Bool
 }
 
 struct IdentityRow: View {
@@ -113,6 +199,11 @@ struct IdentityRow: View {
                 if identity.syncsToICloud {
                     Label("iCloud", systemImage: "icloud").font(.caption2).foregroundStyle(.orange)
                 }
+                if !identity.keyType.canAuthenticate {
+                    Label("export only", systemImage: "exclamationmark.triangle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
         }
         .padding(.vertical, 3)
@@ -140,7 +231,10 @@ struct GenerateIdentityView: View {
                 Section {
                     LabeledField("Name", text: $name, placeholder: "iPhone", autocorrect: false)
                     Picker("Type", selection: $keyType) {
-                        ForEach(SSHKeyType.allCases) { type in
+                        // `generatable` rather than `allCases`: RSA can be
+                        // imported but not used, and offering to generate one
+                        // would be a trap.
+                        ForEach(SSHKeyType.generatable) { type in
                             Text(type.displayName).tag(type)
                         }
                     }
@@ -192,6 +286,11 @@ struct GenerateIdentityView: View {
             return "Ed25519 is the default: small, fast, and accepted by every modern OpenSSH."
         case .secureEnclaveP256:
             return "The private key is generated inside the Secure Enclave and can never be read out — not by this app, not by a backup, not by anyone with the device unlocked. It also cannot be exported or moved to another device."
+        case .rsa:
+            return """
+                RSA keys can be imported and exported but not used to connect: \
+                swift-nio-ssh cannot sign with them.
+                """
         default:
             return "NIST curve. Use it when the remote host's policy requires ECDSA."
         }
@@ -220,11 +319,29 @@ struct ImportIdentityView: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
 
+    /// Key text already obtained from the system paste control, so this sheet
+    /// never has to touch the pasteboard itself.
+    var prefilledPEM: String = ""
+    var suggestedName: String = ""
+    var cameFromClipboard: Bool = false
+
     @State private var name = ""
     @State private var pem = ""
     @State private var syncToICloud = false
     @State private var showingFilePicker = false
+    @State private var showingOnePasswordGuide = false
     @State private var errorMessage: String?
+    @State private var clipboardMayHaveKey = false
+    /// True once the key in the editor came from the clipboard, so a successful
+    /// import can wipe it. Starts from `cameFromClipboard` and is set again by
+    /// an in-sheet paste.
+    @State private var wipeClipboardOnImport = false
+
+    /// What the pasted text appears to be, recomputed as it changes so the
+    /// footer can say something useful before the user taps Import.
+    private var detectedFormat: PEMKeyFormat {
+        pem.isEmpty ? .unrecognised : PEMPrivateKey.detect(pem)
+    }
 
     var body: some View {
         NavigationStack {
@@ -241,16 +358,28 @@ struct ImportIdentityView: View {
                     Button {
                         showingFilePicker = true
                     } label: { Label("Choose a file…", systemImage: "folder") }
-                    Button {
-                        pem = UIPasteboard.general.string ?? pem
-                    } label: { Label("Paste from clipboard", systemImage: "doc.on.clipboard") }
+                    if clipboardMayHaveKey {
+                        HStack {
+                            Label("From the clipboard", systemImage: "doc.on.clipboard")
+                            Spacer()
+                            PasteKeyControl { text in absorb(text) }
+                                .frame(width: 96, height: 34)
+                        }
+                    }
                 } header: {
-                    Text("OpenSSH private key")
+                    Text("Private key")
                 } footer: {
-                    Text("Unencrypted openssh-key-v1 only (ed25519 or ECDSA). Decrypt a passphrase-protected key first with: ssh-keygen -p -N \"\" -f key. RSA is not supported — swift-nio-ssh has no RSA client key support at all.")
+                    Text(footerText)
                 }
                 Section {
                     Toggle("Sync via iCloud Keychain", isOn: $syncToICloud)
+                }
+                Section {
+                    Button {
+                        showingOnePasswordGuide = true
+                    } label: {
+                        Label("Import from 1Password…", systemImage: "questionmark.circle")
+                    }
                 }
             }
             .navigationTitle("Import key")
@@ -268,13 +397,77 @@ struct ImportIdentityView: View {
             ) { result in
                 loadFile(result)
             }
+            .sheet(isPresented: $showingOnePasswordGuide) { OnePasswordImportGuide() }
             .alert("Could not import", isPresented: .init(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
             ), presenting: errorMessage) { _ in
                 Button("OK", role: .cancel) {}
             } message: { Text($0) }
-            .onAppear { syncToICloud = settings.iCloudSyncDefault }
+            .onAppear {
+                syncToICloud = settings.iCloudSyncDefault
+                clipboardMayHaveKey = ClipboardKeyImport.mayHaveKey
+                if pem.isEmpty, !prefilledPEM.isEmpty { pem = prefilledPEM }
+                if cameFromClipboard { wipeClipboardOnImport = true }
+                if name.isEmpty, !suggestedName.isEmpty { name = suggestedName }
+            }
+        }
+    }
+
+    /// Says what the pasted text is, or what is accepted when there is none.
+    private var footerText: String {
+        guard !pem.isEmpty else {
+            return """
+                OpenSSH (-----BEGIN OPENSSH PRIVATE KEY-----), PKCS#8 (-----BEGIN PRIVATE \
+                KEY-----), PKCS#1 RSA and SEC 1 EC keys, unencrypted. Ed25519, ECDSA \
+                P-256/384/521 and RSA. Decrypt a passphrase-protected key first with: \
+                ssh-keygen -p -N "" -f key
+                """
+        }
+        switch detectedFormat {
+        case .encrypted:
+            return """
+                This key is passphrase-protected. Decrypt a copy first: \
+                ssh-keygen -p -N "" -f key
+                """
+        case .unrecognised:
+            return """
+                No private key found in that text. PuTTY .ppk files and DSA keys are not \
+                supported; public keys go in the server's authorized_keys, not here.
+                """
+        default:
+            var text = "Looks like a \(detectedFormat.displayName)."
+            if let parsed = try? PEMPrivateKey.parse(pem) {
+                text += " \(parsed.material.keyType.displayName)."
+                if !parsed.material.keyType.canAuthenticate {
+                    text += """
+                         It can be stored, fingerprinted and exported, but the SSH library \
+                        this app is built on cannot sign with RSA, so it cannot connect \
+                        with it yet.
+                        """
+                }
+            }
+            return text
+        }
+    }
+
+    /// Take text handed over by the system paste control.
+    private func absorb(_ text: String) {
+        switch ClipboardKeyImport.classify(text) {
+        case .key(let key, _, let suggested):
+            pem = key
+            wipeClipboardOnImport = true
+            if name.trimmingCharacters(in: .whitespaces).isEmpty { name = suggested }
+        case .encryptedKey:
+            pem = text
+            wipeClipboardOnImport = true
+        case .notAKey:
+            errorMessage = """
+                That is not a private key. In 1Password, open the SSH key item, reveal \
+                the private key and copy that — not the public key, and not the item.
+                """
+        case .empty:
+            errorMessage = "There was nothing on the clipboard."
         }
     }
 
@@ -285,6 +478,7 @@ struct ImportIdentityView: View {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             pem = try String(contentsOf: url, encoding: .utf8)
+            wipeClipboardOnImport = false
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -297,9 +491,16 @@ struct ImportIdentityView: View {
                 pem: pem,
                 syncToICloud: syncToICloud
             )
+            // A private key left on the system pasteboard is readable by the
+            // next app the user opens, and by any Mac on the same iCloud
+            // account through Universal Clipboard. The user is finished with
+            // it; take it away.
+            if wipeClipboardOnImport { ClipboardKeyImport.clear() }
+            Haptics.shared.fire(.keyGenerated)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+            Haptics.shared.fire(.syncFailed)
         }
     }
 }
@@ -327,6 +528,22 @@ struct ExportIdentityView: View {
                     Text("Public key")
                 } footer: {
                     Text("Append this line to ~/.ssh/authorized_keys on the remote host.")
+                }
+                if !identity.keyType.canAuthenticate {
+                    Section {
+                        Label {
+                            Text("""
+                                This key can be stored, fingerprinted and exported, but \
+                                Ghostty cannot connect with it: swift-nio-ssh has no RSA \
+                                client key support and no way to add one from outside the \
+                                library. Use an Ed25519 key to connect.
+                                """)
+                            .font(.callout)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
                 }
                 Section {
                     ShareLink(item: identity.publicKeyLine) {

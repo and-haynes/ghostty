@@ -15,14 +15,17 @@ import NIOSSH
 extension SSHPrivateKeyMaterial {
     /// The NIOSSH representation of this key.
     ///
-    /// Non-throwing on purpose: every case the vault can hold has a matching
-    /// NIOSSH initialiser (Secure Enclave P-256 included, as of nio-ssh 0.15.0),
-    /// so there is no failure mode to report. RSA is deliberately absent from
-    /// `SSHPrivateKeyMaterial` because NIOSSH cannot sign with it at all — that
-    /// gap is surfaced to the user as `SSHError.rsaKeysUnsupported` at import
-    /// time rather than being silently swallowed here.
-    var nioSSHPrivateKey: NIOSSHPrivateKey {
+    /// Throwing, and the one case that throws is RSA. `NIOSSHPrivateKey` has
+    /// five public initialisers — Ed25519, the three NIST curves, and Secure
+    /// Enclave P-256 — wrapping a private enum, with no sixth and no protocol
+    /// to conform to. The vault can hold, fingerprint and export an RSA key
+    /// (which is most of what a key manager is for) but cannot hand one to the
+    /// SSH layer, so the gap surfaces here as a sentence rather than as a
+    /// silently missing credential.
+    func nioSSHPrivateKey() throws -> NIOSSHPrivateKey {
         switch self {
+        case .rsa:
+            throw SSHError.rsaKeysUnsupported
         case .ed25519(let key):
             return NIOSSHPrivateKey(ed25519Key: key)
         case .p256(let key):
@@ -44,11 +47,11 @@ extension SSHPrivateKeyMaterial {
     /// `serviceName` is accepted by the initialiser but ignored by NIOSSH — it
     /// always requests "ssh-connection" — so we pass the empty string that
     /// NIOSSH's own `SimplePasswordDelegate` uses.
-    func authenticationOffer(username: String) -> NIOSSHUserAuthenticationOffer {
+    func authenticationOffer(username: String) throws -> NIOSSHUserAuthenticationOffer {
         NIOSSHUserAuthenticationOffer(
             username: username,
             serviceName: "",
-            offer: .privateKey(.init(privateKey: self.nioSSHPrivateKey))
+            offer: .privateKey(.init(privateKey: try self.nioSSHPrivateKey()))
         )
     }
 }

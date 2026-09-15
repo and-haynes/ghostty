@@ -89,8 +89,15 @@ final class Vault: ObservableObject {
         return identity
     }
 
+    /// Import a private key in any encoding `PEMPrivateKey` understands.
+    ///
+    /// Routed through the format detector rather than straight into the
+    /// `openssh-key-v1` parser: a key copied out of 1Password, exported from a
+    /// cloud console or made by `openssl` is PKCS#8 or PKCS#1, and refusing
+    /// those told the user to produce a format they had no way to produce
+    /// (#008A1).
     func importIdentity(name: String, pem: String, syncToICloud: Bool = false) throws -> Identity {
-        let parsed = try OpenSSHKeyFile.parse(pem: pem)
+        let parsed = try PEMPrivateKey.parse(pem)
         // Fall back to the key's own comment so importing a key with a blank
         // name still produces something recognisable in the list.
         let proposed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -322,7 +329,7 @@ final class Vault: ObservableObject {
         for incoming in snapshot.identities {
             if identities.contains(where: { $0.id == incoming.identity.id }) { continue }
             if let pem = incoming.privateKeyPEM {
-                let parsed = try OpenSSHKeyFile.parse(pem: pem)
+                let parsed = try PEMPrivateKey.parse(pem)
                 try store(parsed.material, for: incoming.identity)
             }
             identities.append(incoming.identity)

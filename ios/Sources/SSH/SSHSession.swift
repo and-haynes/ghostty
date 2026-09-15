@@ -510,6 +510,9 @@ final class SSHSession: ObservableObject {
         publishesProgress: Bool,
         schemes: [NIOSSHTransportProtection.Type] = SSHTransportProtectionCatalog.clientSchemes
     ) async throws {
+        // Boxed so the metatypes can cross into the channel initialiser, which
+        // is `@Sendable`. See `SSHTransportProtectionSchemes`.
+        let protection = SSHTransportProtectionSchemes(schemes)
         self.generation &+= 1
         let generation = self.generation
         self.publishesProgress = publishesProgress
@@ -583,7 +586,7 @@ final class SSHSession: ObservableObject {
                                 // router, NAS and Dropbear box unreachable.
                                 // See `SSHTransportProtectionCatalog` for what
                                 // this adds and the order it adds it in.
-                                transportProtectionSchemes: schemes
+                                transportProtectionSchemes: protection.schemes
                             )
                         ),
                         allocator: channel.allocator,

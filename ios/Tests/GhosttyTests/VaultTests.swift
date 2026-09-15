@@ -225,8 +225,22 @@ func testEd25519RoundTripIsLossless() throws {
         \(container.base64EncodedString())
         -----END OPENSSH PRIVATE KEY-----
         """
+        // RSA is parsed now (#008A0): a container claiming to hold one but
+        // carrying none of its six fields is a malformed key, not an
+        // unsupported one. DSA is still refused by name, which is what this
+        // test is really for.
         XCTAssertThrowsError(try OpenSSHKeyFile.parse(pem: pem)) { error in
-            XCTAssertEqual(error as? VaultError, .unsupportedKeyType("ssh-rsa"))
+            guard case .malformedKey = (error as? VaultError) else {
+                return XCTFail("expected a malformed-key error, got \(error)")
+            }
+        }
+
+        let dsa = pem.replacingOccurrences(
+            of: OpenSSHWire.writeString("ssh-rsa").base64EncodedString(),
+            with: OpenSSHWire.writeString("ssh-dss").base64EncodedString()
+        )
+        if dsa != pem {
+            XCTAssertThrowsError(try OpenSSHKeyFile.parse(pem: dsa))
         }
     }
 

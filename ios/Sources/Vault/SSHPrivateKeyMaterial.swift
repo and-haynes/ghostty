@@ -18,6 +18,10 @@ enum SSHPrivateKeyMaterial {
     case p384(P384.Signing.PrivateKey)
     case p521(P521.Signing.PrivateKey)
     case secureEnclaveP256(SecureEnclave.P256.Signing.PrivateKey)
+    /// Backed by a Security.framework `SecKey`. Importable and exportable;
+    /// cannot sign an SSH handshake, because swift-nio-ssh has nowhere to put
+    /// it — see `RSAKey.swift`.
+    case rsa(RSAPrivateKey)
 
     var keyType: SSHKeyType {
         switch self {
@@ -26,6 +30,7 @@ enum SSHPrivateKeyMaterial {
         case .p384: return .p384
         case .p521: return .p521
         case .secureEnclaveP256: return .secureEnclaveP256
+        case .rsa: return .rsa
         }
     }
 
@@ -56,6 +61,8 @@ enum SSHPrivateKeyMaterial {
             // An SE key is a plain nistp256 key on the wire — the server has
             // no idea (and no need to know) where the private half lives.
             return Self.ecdsaBlob(type: .secureEnclaveP256, point: key.publicKey.x963Representation)
+        case .rsa(let key):
+            return key.publicKey.sshBlob
         }
     }
 
@@ -85,6 +92,11 @@ enum SSHPrivateKeyMaterial {
 
     static func generate(_ type: SSHKeyType, requiresBiometrics: Bool) throws -> SSHPrivateKeyMaterial {
         switch type {
+        case .rsa:
+            // Not offered in the UI (see `SSHKeyType.generatable`), and refused
+            // here too: a key this app cannot authenticate with is a trap, not
+            // a feature.
+            throw VaultError.unsupportedKeyType("RSA")
         case .ed25519: return .ed25519(Curve25519.Signing.PrivateKey())
         case .p256: return .p256(P256.Signing.PrivateKey())
         case .p384: return .p384(P384.Signing.PrivateKey())
@@ -133,6 +145,9 @@ enum SSHPrivateKeyMaterial {
         case .p384(let key): return key.rawRepresentation
         case .p521(let key): return key.rawRepresentation
         case .secureEnclaveP256(let key): return key.dataRepresentation
+        // PKCS#1, which is both what Security.framework round-trips and what a
+        // `-----BEGIN RSA PRIVATE KEY-----` file contains.
+        case .rsa(let key): return key.pkcs1DER
         }
     }
 
@@ -152,6 +167,8 @@ enum SSHPrivateKeyMaterial {
                 return .secureEnclaveP256(
                     try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: data)
                 )
+            case .rsa:
+                return .rsa(try RSAPrivateKey(pkcs1DER: data))
             }
         } catch let error as VaultError {
             throw error

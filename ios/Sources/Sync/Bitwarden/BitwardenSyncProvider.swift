@@ -546,7 +546,9 @@ final class BitwardenSyncProvider: VaultSyncProvider {
            !decoded.trimmingCharacters(in: .whitespaces).isEmpty {
             publicKeyLine = decoded
         } else {
-            let parsed = try OpenSSHKeyFile.parse(pem: pem)
+            // Any encoding, not just openssh-key-v1: Bitwarden's own clients
+            // store whatever the user pasted in, which is often PKCS#8.
+            let parsed = try PEMPrivateKey.parse(pem)
             publicKeyLine = parsed.material.publicKeyLine(comment: parsed.comment)
         }
         publicKeyLine = publicKeyLine.trimmingCharacters(in: .whitespacesAndNewlines)

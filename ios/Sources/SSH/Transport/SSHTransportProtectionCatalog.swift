@@ -45,6 +45,20 @@ import NIOSSH
 /// cipher key; both are therefore only safe when the exchange is known in
 /// advance to be `ecdh-sha2-nistp521`. `longKeySchemes` exists for exactly that
 /// case and is only used once a probe of the server has confirmed it.
+/// A `Sendable` wrapper for a list of transport protection *metatypes*.
+///
+/// `NIOSSHTransportProtection.Type` is not `Sendable` — metatypes of
+/// non-`Sendable` protocols never are — but a list of them is immutable, has no
+/// storage, and is only ever read. Without this box the array cannot cross into
+/// a `ClientBootstrap.channelInitializer`, which is the one place it needs to go.
+struct SSHTransportProtectionSchemes: @unchecked Sendable {
+    let schemes: [NIOSSHTransportProtection.Type]
+
+    init(_ schemes: [NIOSSHTransportProtection.Type]) {
+        self.schemes = schemes
+    }
+}
+
 enum SSHTransportProtectionCatalog {
     /// The schemes offered on every connection.
     ///

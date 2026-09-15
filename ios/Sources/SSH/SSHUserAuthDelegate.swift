@@ -32,6 +32,9 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
     private var consumed: [Bool]
     private var offeredAnything = false
     private var announcedAttempt = false
+    /// Set when a configured credential turned out to be one the SSH library
+    /// cannot use, so the give-up message can name it.
+    private var unusableKeyType: String?
 
     init(
         username: String,
@@ -91,6 +94,7 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
         case exhausted(SSHError)
     }
 
+
     /// Must be called with `lock` held.
     private func nextOfferLocked(
         availableMethods: NIOSSHAvailableUserAuthenticationMethods
@@ -107,14 +111,30 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
             }
 
             self.consumed[index] = true
+            guard let offer = self.makeOffer(for: method) else {
+                // The only way this happens is an RSA key, which the vault can
+                // hold but swift-nio-ssh cannot sign with. Consume it and carry
+                // on: a password on the same host should still get the user in.
+                self.unusableKeyType = method.debugLabel
+                continue
+            }
             self.offeredAnything = true
-            return .offer(self.makeOffer(for: method))
+            return .offer(offer)
         }
 
         // Nothing left to offer. Say which of the two situations it is.
         let serverMethods = Self.describe(availableMethods)
 
         if !self.offeredAnything {
+            if let unusableKeyType = self.unusableKeyType {
+                return .exhausted(
+                    .authenticationFailed(
+                        "The only credential configured for this host is an \(unusableKeyType), "
+                            + "and the SSH library this app is built on cannot sign with RSA. "
+                            + "Add an Ed25519 key, or turn on password authentication for the host."
+                    )
+                )
+            }
             if sawUnusable {
                 return .exhausted(
                     .authenticationFailed(
@@ -137,7 +157,9 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
         )
     }
 
-    private func makeOffer(for method: SSHAuthMethod) -> NIOSSHUserAuthenticationOffer {
+    /// nil when the credential cannot be turned into an offer at all — today
+    /// that means only an RSA key.
+    private func makeOffer(for method: SSHAuthMethod) -> NIOSSHUserAuthenticationOffer? {
         switch method {
         case .password(let password):
             return NIOSSHUserAuthenticationOffer(
@@ -146,7 +168,7 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
                 offer: .password(.init(password: password))
             )
         case .privateKey(let material):
-            return material.authenticationOffer(username: self.username)
+            return try? material.authenticationOffer(username: self.username)
         case .none:
             return NIOSSHUserAuthenticationOffer(
                 username: self.username,

@@ -320,3 +320,57 @@ final class SSHConnectionReportTests: XCTestCase {
         XCTAssertTrue(report.detail.contains("Nothing answered on port 22."))
     }
 }
+
+/// Certificate-signed hosts (#008A3). swift-nio-ssh can parse an OpenSSH
+/// certificate but never *negotiates* one — its host key algorithm list is a
+/// hardcoded constant — so a server presenting only certificates is
+/// unreachable, and the app has to say which of those two things went wrong.
+final class SSHCertificateHostKeyTests: XCTestCase {
+    func testACertificateOnlyServerIsExplainedAsSuch() {
+        let offer = SSHServerOffer(
+            banner: "SSH-2.0-OpenSSH_9.6",
+            preamble: [],
+            keyExchangeAlgorithms: ["curve25519-sha256"],
+            hostKeyAlgorithms: [
+                "ssh-ed25519-cert-v01@openssh.com",
+                "ecdsa-sha2-nistp256-cert-v01@openssh.com",
+            ],
+            ciphersClientToServer: ["aes256-ctr"],
+            ciphersServerToClient: ["aes256-ctr"],
+            macsClientToServer: ["hmac-sha2-256"],
+            macsServerToClient: ["hmac-sha2-256"],
+            compressionClientToServer: ["none"],
+            compressionServerToClient: ["none"]
+        )
+        let mismatch = SSHAlgorithmMismatch(hostname: "ca-signed", offer: offer)
+        XCTAssertEqual(mismatch.failures, [.hostKey])
+        let text = mismatch.explanation
+        XCTAssertTrue(text.contains("CA-signed host certificates"))
+        XCTAssertTrue(text.contains("keep a plain Ed25519 host key"))
+        XCTAssertFalse(text.contains("ssh-keygen -A"), "the RSA advice does not apply here")
+    }
+
+    func testACertificateAlongsideAPlainKeyIsFine() {
+        let offer = SSHServerOffer(
+            banner: "SSH-2.0-OpenSSH_9.6",
+            preamble: [],
+            keyExchangeAlgorithms: ["curve25519-sha256"],
+            hostKeyAlgorithms: ["ssh-ed25519-cert-v01@openssh.com", "ssh-ed25519"],
+            ciphersClientToServer: ["aes256-ctr"],
+            ciphersServerToClient: ["aes256-ctr"],
+            macsClientToServer: ["hmac-sha2-256"],
+            macsServerToClient: ["hmac-sha2-256"],
+            compressionClientToServer: ["none"],
+            compressionServerToClient: ["none"]
+        )
+        let mismatch = SSHAlgorithmMismatch(hostname: "ca-signed", offer: offer)
+        XCTAssertTrue(mismatch.canNegotiate, mismatch.explanation)
+        XCTAssertEqual(mismatch.hostKeysInCommon, ["ssh-ed25519"])
+    }
+
+    func testCertificateNamesAreRecognised() {
+        XCTAssertTrue(SSHAlgorithmMismatch.isCertificate("ssh-ed25519-cert-v01@openssh.com"))
+        XCTAssertTrue(SSHAlgorithmMismatch.isCertificate("rsa-sha2-512-cert-v01@openssh.com"))
+        XCTAssertFalse(SSHAlgorithmMismatch.isCertificate("ssh-ed25519"))
+    }
+}

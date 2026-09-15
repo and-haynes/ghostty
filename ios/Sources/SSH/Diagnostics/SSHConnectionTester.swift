@@ -272,6 +272,9 @@ enum SSHConnectionTester {
         authDelegate: SSHUserAuthDelegate,
         recorder: SSHFailureRecorder
     ) async throws {
+        let protection = SSHTransportProtectionSchemes(
+            SSHTransportProtectionCatalog.clientSchemes
+        )
         let bootstrap = ClientBootstrap(group: SSHEventLoopGroupProvider.shared)
             .connectTimeout(.seconds(15))
             .channelInitializer { channel in
@@ -284,8 +287,7 @@ enum SSHConnectionTester {
                                     userAuthDelegate: authDelegate,
                                     serverAuthDelegate: hostKeyDelegate,
                                     globalRequestDelegate: nil,
-                                    transportProtectionSchemes: SSHTransportProtectionCatalog
-                                        .clientSchemes
+                                    transportProtectionSchemes: protection.schemes
                                 )
                             ),
                             allocator: channel.allocator,

@@ -4,9 +4,13 @@ import Foundation
 
 /// The SSH key algorithms the vault can hold.
 ///
-/// NIOSSH (Apple's swift-nio-ssh) implements ed25519 and the three NIST
-/// curves for client authentication. It has no RSA client key support at
-/// all, which is why `rsa` is absent here rather than merely unimplemented.
+/// swift-nio-ssh implements Ed25519 and the three NIST curves for client
+/// authentication, and its `NIOSSHPrivateKey` has a closed set of initialisers
+/// with no extension point. **RSA keys can therefore be imported, stored,
+/// fingerprinted and exported here but not authenticated with** — see
+/// `RSAKey.swift` for the detail. Holding them is still worth doing: pasting
+/// the public line into a server's `authorized_keys` is most of what a key
+/// manager is for, and refusing the import outright told the user nothing.
 enum SSHKeyType: String, Codable, CaseIterable, Identifiable, Sendable {
     case ed25519
     case p256
@@ -14,6 +18,8 @@ enum SSHKeyType: String, Codable, CaseIterable, Identifiable, Sendable {
     case p521
     /// P-256 whose private half never leaves the Secure Enclave.
     case secureEnclaveP256
+    /// Importable and exportable; cannot yet sign an SSH handshake.
+    case rsa
 
     var id: String { rawValue }
 
@@ -24,6 +30,7 @@ enum SSHKeyType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .p256, .secureEnclaveP256: return "ecdsa-sha2-nistp256"
         case .p384: return "ecdsa-sha2-nistp384"
         case .p521: return "ecdsa-sha2-nistp521"
+        case .rsa: return "ssh-rsa"
         }
     }
 
@@ -34,6 +41,7 @@ enum SSHKeyType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .p256, .secureEnclaveP256: return "nistp256"
         case .p384: return "nistp384"
         case .p521: return "nistp521"
+        case .rsa: return nil
         }
     }
 
@@ -44,10 +52,22 @@ enum SSHKeyType: String, Codable, CaseIterable, Identifiable, Sendable {
         case .p384: return "ECDSA P-384"
         case .p521: return "ECDSA P-521"
         case .secureEnclaveP256: return "Secure Enclave P-256"
+        case .rsa: return "RSA"
         }
     }
 
     var isSecureEnclave: Bool { self == .secureEnclaveP256 }
+
+    /// Whether a key of this type can authenticate an SSH connection today.
+    ///
+    /// False only for RSA, and only because swift-nio-ssh cannot sign with it.
+    var canAuthenticate: Bool { self != .rsa }
+
+    /// Types offered in the in-app generator. RSA is absent deliberately:
+    /// generating a key the app cannot then use would be a trap.
+    static var generatable: [SSHKeyType] {
+        Self.allCases.filter { $0 != .rsa }
+    }
 }
 
 // MARK: - Identity

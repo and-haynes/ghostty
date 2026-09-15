@@ -25,7 +25,7 @@ enum VaultError: Error, LocalizedError, Equatable {
         case .unsupportedKeyType(let name):
             return """
             "\(name)" keys are not supported. Ghostty can use Ed25519 and ECDSA \
-            P-256/P-384/P-521 keys; RSA is not supported by the SSH library it is built on.
+            P-256/P-384/P-521 keys, and can store and export RSA keys.
             """
         case .malformedKey(let detail):
             return "This does not look like a valid OpenSSH private key. \(detail)"
@@ -208,6 +208,33 @@ enum OpenSSHKeyFile {
             }
             return material
 
+        case SSHKeyType.rsa.opensshName:
+            // OpenSSH writes n, e, d, iqmp, p, q. PKCS#1 also wants the CRT
+            // exponents, which `RSAPrivateKey` recomputes.
+            guard let n = reader.readString(),
+                let e = reader.readString(),
+                let d = reader.readString(),
+                let iqmp = reader.readString(),
+                let p = reader.readString(),
+                let q = reader.readString()
+            else {
+                throw VaultError.malformedKey("The RSA key fields are truncated.")
+            }
+            do {
+                return .rsa(
+                    try RSAPrivateKey(
+                        modulus: n,
+                        exponent: e,
+                        privateExponent: d,
+                        prime1: p,
+                        prime2: q,
+                        coefficient: iqmp
+                    )
+                )
+            } catch let error as RSAKeyError {
+                throw VaultError.malformedKey(error.errorDescription ?? "\(error)")
+            }
+
         default:
             throw VaultError.unsupportedKeyType(typeName)
         }
@@ -251,6 +278,8 @@ enum OpenSSHKeyFile {
             )
         case .secureEnclaveP256:
             throw VaultError.cannotExportSecureEnclaveKey
+        case .rsa(let key):
+            privateSection += Self.rsaPrivateFields(key)
         }
 
         privateSection += OpenSSHWire.writeString(comment)
@@ -269,6 +298,34 @@ enum OpenSSHKeyFile {
         container += OpenSSHWire.writeString(privateSection)
 
         return encodePEM(container)
+    }
+
+    /// The six fields OpenSSH stores for an RSA key, in its order: n, e, d,
+    /// iqmp, p, q. The CRT exponents are deliberately absent — OpenSSH
+    /// recomputes them, and so do we on the way back in.
+    private static func rsaPrivateFields(_ key: RSAPrivateKey) -> Data {
+        guard let sequence = try? DER.contents(of: .sequence, in: key.pkcs1DER) else {
+            return Data()
+        }
+        var reader = DER.Reader(sequence)
+        guard (try? reader.readInteger()) != nil,
+            let n = try? reader.readInteger(),
+            let e = try? reader.readInteger(),
+            let d = try? reader.readInteger(),
+            let p = try? reader.readInteger(),
+            let q = try? reader.readInteger(),
+            (try? reader.readInteger()) != nil,  // dP
+            (try? reader.readInteger()) != nil,  // dQ
+            let iqmp = try? reader.readInteger()
+        else {
+            return Data()
+        }
+        return OpenSSHWire.writeMPInt(n)
+            + OpenSSHWire.writeMPInt(e)
+            + OpenSSHWire.writeMPInt(d)
+            + OpenSSHWire.writeMPInt(iqmp)
+            + OpenSSHWire.writeMPInt(p)
+            + OpenSSHWire.writeMPInt(q)
     }
 
     private static func ecdsaPrivateFields(type: SSHKeyType, point: Data, scalar: Data) -> Data {
@@ -339,7 +396,7 @@ enum OpenSSHKeyFile {
         case .p256, .secureEnclaveP256: return 32
         case .p384: return 48
         case .p521: return 66   // 521 bits rounded up
-        case .ed25519: return 32
+        case .ed25519, .rsa: return 32
         }
     }
 
@@ -365,6 +422,7 @@ enum OpenSSHKeyFile {
         case .p521(let key): return key.publicKey.x963Representation
         case .ed25519(let key): return key.publicKey.rawRepresentation
         case .secureEnclaveP256(let key): return key.publicKey.x963Representation
+        case .rsa: return nil
         }
     }
 }

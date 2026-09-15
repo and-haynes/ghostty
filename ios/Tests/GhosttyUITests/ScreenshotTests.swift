@@ -315,6 +315,116 @@ final class ScreenshotTests: XCTestCase {
         )
     }
 
+    /// 15. Importing a key from the clipboard, the way one arrives from
+    /// 1Password (#008A1).
+    ///
+    /// Drives the whole path: clipboard holds a key, the Keys tab offers the
+    /// import, the sheet says what it found, the key lands in the vault, and
+    /// the clipboard is wiped afterwards.
+    func testImportsAKeyFromTheClipboard() throws {
+        // A throwaway PKCS#8 Ed25519 key — the shape 1Password hands out.
+        UIPasteboard.general.string = Self.clipboardFixtureKey
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-ghostty-seed"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Hosts"].waitForExistence(timeout: 30), "the app should launch")
+
+        app.tabBars.buttons["Keys"].tap()
+        _ = app.navigationBars["Keys"].waitForExistence(timeout: 10)
+
+        // The system paste control, not a button of ours: pressing it *is* the
+        // consent, so the contents arrive on the first tap with no alert.
+        let pasteControl = app.buttons["Paste"].firstMatch
+        if !pasteControl.waitForExistence(timeout: 10) {
+            reportHierarchy(app, step: "the clipboard import offer on the Keys tab")
+        }
+        XCTAssertTrue(
+            pasteControl.exists,
+            "a clipboard holding a key must be offered for import"
+        )
+        capture(app, named: "15-clipboard-import-offer")
+        pasteControl.tap()
+
+        XCTAssertTrue(
+            app.navigationBars["Import key"].waitForExistence(timeout: 10),
+            "the import sheet should open straight onto the clipboard"
+        )
+
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertFalse(
+            app.alerts.firstMatch.exists,
+            "UIPasteControl must not raise an \"Allow Paste\" alert"
+        )
+
+        // The footer names what was found, which is how the user knows the
+        // right thing was copied.
+        let described = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] %@", "Looks like a PKCS#8")
+        ).firstMatch
+        XCTAssertTrue(described.waitForExistence(timeout: 5), "the sheet should say what it found")
+        capture(app, named: "15-clipboard-import")
+
+        let importButton = app.buttons["Import"].firstMatch
+        XCTAssertTrue(importButton.isEnabled, "a detected key should be importable")
+        importButton.tap()
+        Thread.sleep(forTimeInterval: 1.5)
+
+        // What happens next depends on the Keychain, and a simulator build made
+        // with CODE_SIGNING_ALLOWED=NO has no keychain-access-group
+        // entitlement — every `SecItemAdd` fails with -34018. That is a
+        // property of this harness, not of the app, so the check is: either the
+        // key landed, or it got all the way to the Keychain and was refused
+        // there. Either outcome proves the clipboard path parsed the key and
+        // handed it to the vault; the storage path itself is covered by the
+        // unit tests, which use an in-memory Keychain.
+        let entitlementError = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] %@", "Keychain error -34018")
+        ).firstMatch
+        if entitlementError.exists {
+            capture(app, named: "15-clipboard-imported")
+            throw XCTSkip(
+                """
+                The clipboard key parsed and reached the vault, but this unsigned \
+                simulator build cannot write to the Keychain (-34018). Run the app from \
+                Xcode with a signing team to exercise the rest.
+                """
+            )
+        }
+
+        XCTAssertTrue(
+            app.navigationBars["Keys"].waitForExistence(timeout: 10),
+            "the sheet should close on a successful import"
+        )
+        capture(app, named: "15-clipboard-imported")
+        XCTAssertTrue(
+            app.staticTexts["1Password key"].waitForExistence(timeout: 5),
+            "the imported key should be listed under the name the format suggested"
+        )
+
+        // The clipboard is wiped once the key is in the Keychain. The write
+        // happens in the app and is read back here in the runner, so give the
+        // two processes a moment to agree.
+        var clipboard = UIPasteboard.general.string
+        let deadline = Date().addingTimeInterval(5)
+        while let text = clipboard, !text.isEmpty, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            clipboard = UIPasteboard.general.string
+        }
+        XCTAssertTrue(
+            clipboard?.isEmpty ?? true,
+            "the clipboard must be cleared after import, found: \(clipboard ?? "nil")"
+        )
+    }
+
+    /// Generated with `openssl genpkey -algorithm ed25519`, used nowhere else,
+    /// trusted by nothing.
+    private static let clipboardFixtureKey = """
+        -----BEGIN PRIVATE KEY-----
+        MC4CAQAwBQYDK2VwBCIEICUesc/lPoXIX7d4qiIrn0YQJgDGKtOe7S//rOs0I+j0
+        -----END PRIVATE KEY-----
+        """
+
     /// The edit menu's Paste item.
     ///
     /// Deliberately scoped to the menu rather than asking the app for any
