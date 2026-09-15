@@ -68,12 +68,14 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: "1,2"    # iPhone + iPad
         SUPPORTS_MACCATALYST: NO
-        # Xcode normally derives these from the linked xcframework, but being
-        # explicit keeps `import GhosttyVt` working for every slice.
-        "HEADER_SEARCH_PATHS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/Frameworks/ghostty-vt.xcframework/ios-arm64/Headers"
-        "HEADER_SEARCH_PATHS[sdk=iphonesimulator*]": "$(inherited) $(PROJECT_DIR)/Frameworks/ghostty-vt.xcframework/ios-arm64-simulator/Headers"
-        "SWIFT_INCLUDE_PATHS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/Frameworks/ghostty-vt.xcframework/ios-arm64/Headers"
-        "SWIFT_INCLUDE_PATHS[sdk=iphonesimulator*]": "$(inherited) $(PROJECT_DIR)/Frameworks/ghostty-vt.xcframework/ios-arm64-simulator/Headers"
+        # The xcframework ships ios-arm64 and ios-arm64-simulator only, so an
+        # x86_64 simulator slice has nothing to link against. Excluding it is
+        # honest; the alternative is a link failure on every generic build.
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+        # No HEADER_SEARCH_PATHS for the xcframework here on purpose: Xcode
+        # adds the matching slice's Headers directory itself, and adding it a
+        # second time makes clang see module.modulemap twice and fail with
+        # "Redefinition of module 'GhosttyVt'".
 
   GhosttyTests:
     type: bundle.unit-test
@@ -86,6 +88,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.morton.ghostty.tests
         GENERATE_INFOPLIST_FILE: YES
+        # The xcframework's Headers directory arrives via the dependency on the
+        # Ghostty target; adding it explicitly makes clang see module.modulemap
+        # twice ("Redefinition of module 'GhosttyVt'").
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
 
 schemes:
   Ghostty:
