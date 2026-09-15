@@ -234,3 +234,89 @@ final class SSHAlgorithmMismatchTests: XCTestCase {
         return SSHKEXInitParser.offer(banner: banner, preamble: [], lists: lists)
     }
 }
+
+/// The report the **Test connection** sheet renders and copies.
+final class SSHConnectionReportTests: XCTestCase {
+    func testAReadyReportSaysSoAndNamesTheAlgorithms() {
+        var report = SSHConnectionReport(destination: "andy@pi-a", outcome: .ready)
+        report.offer = SSHServerOffer(
+            banner: "SSH-2.0-OpenSSH_10.3",
+            preamble: [],
+            keyExchangeAlgorithms: ["curve25519-sha256"],
+            hostKeyAlgorithms: ["ssh-ed25519"],
+            ciphersClientToServer: ["aes256-gcm@openssh.com"],
+            ciphersServerToClient: ["aes256-gcm@openssh.com"],
+            macsClientToServer: ["hmac-sha2-256"],
+            macsServerToClient: ["hmac-sha2-256"],
+            compressionClientToServer: ["none"],
+            compressionServerToClient: ["none"]
+        )
+        report.negotiatedKeyExchange = "curve25519-sha256"
+        report.negotiatedHostKeyAlgorithm = "ssh-ed25519"
+        report.negotiatedCipher = "aes256-gcm@openssh.com"
+        report.hostKeyType = "ssh-ed25519"
+        report.hostKeyFingerprint = "SHA256:abc"
+        report.hostKeyMatchesPin = true
+
+        XCTAssertTrue(report.succeeded)
+        let text = report.detail
+        XCTAssertTrue(text.contains("SSH-2.0-OpenSSH_10.3"))
+        XCTAssertTrue(text.contains("aes256-gcm@openssh.com"))
+        XCTAssertTrue(text.contains("SHA256:abc"))
+        XCTAssertTrue(text.contains("matches the key saved for this host"))
+        XCTAssertTrue(text.contains("Authentication succeeded"))
+        XCTAssertTrue(text.contains("(the cipher's own)"), "an AEAD negotiates no separate MAC")
+    }
+
+    /// The security property worth pinning: a diagnostic must not hand
+    /// credentials to a host whose key has never been checked.
+    func testAnUntrustedHostKeySaysNothingWasSent() {
+        var report = SSHConnectionReport(destination: "andy@new-box", outcome: .hostKeyNotTrusted)
+        report.hostKeyType = "ssh-ed25519"
+        report.hostKeyFingerprint = "SHA256:xyz"
+        report.hostKeyMatchesPin = nil
+
+        XCTAssertFalse(report.succeeded)
+        let text = report.detail
+        XCTAssertTrue(text.contains("No credential was offered"))
+        XCTAssertTrue(text.contains("not saved yet"))
+        XCTAssertTrue(text.contains("SHA256:xyz"), "the fingerprint is the whole point of asking")
+    }
+
+    func testAChangedHostKeyIsLoud() {
+        var report = SSHConnectionReport(destination: "andy@pi-a", outcome: .hostKeyChanged)
+        report.hostKeyMatchesPin = false
+        report.hostKeyFingerprint = "SHA256:different"
+        let text = report.detail
+        XCTAssertTrue(text.contains("DOES NOT match"))
+        XCTAssertTrue(text.contains("No credential was offered"))
+    }
+
+    func testAnUnnegotiableServerCarriesTheWholeExplanation() throws {
+        let lists = try XCTUnwrap(
+            try SSHKEXInitParser.parse(packet: SSHKEXInitFixtures.rsaAndCTROnlyPacket)
+        )
+        let offer = SSHKEXInitParser.offer(
+            banner: "SSH-2.0-dropbear_2022.83",
+            preamble: [],
+            lists: lists
+        )
+        var report = SSHConnectionReport(destination: "andy@Levitt", outcome: .cannotNegotiate)
+        report.offer = offer
+        report.mismatch = SSHAlgorithmMismatch(hostname: "Levitt", offer: offer)
+
+        let text = report.detail
+        XCTAssertTrue(text.contains("host key"))
+        XCTAssertTrue(text.contains("ssh-rsa"))
+        XCTAssertTrue(text.contains("ssh-keygen -A"))
+    }
+
+    func testAnUnreachableHostSaysWhy() {
+        let report = SSHConnectionReport(
+            destination: "andy@nowhere",
+            outcome: .unreachable("Nothing answered on port 22.")
+        )
+        XCTAssertTrue(report.headline.contains("Couldn't reach"))
+        XCTAssertTrue(report.detail.contains("Nothing answered on port 22."))
+    }
+}

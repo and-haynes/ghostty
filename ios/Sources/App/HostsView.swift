@@ -158,6 +158,7 @@ struct HostEditorView: View {
     @State private var password = ""
     @State private var tagText = ""
     @State private var errorMessage: String?
+    @State private var testing = false
 
     var body: some View {
         NavigationStack {
@@ -203,6 +204,22 @@ struct HostEditorView: View {
                     ), placeholder: "tmux attach", autocorrect: false)
                 }
 
+                Section {
+                    Button {
+                        testing = true
+                    } label: {
+                        Label("Test connection", systemImage: "stethoscope")
+                    }
+                    .disabled(!isValid)
+                } footer: {
+                    Text("""
+                        Connects far enough to read the server's banner, compare its \
+                        algorithms with the ones this app supports, and show its host key \
+                        fingerprint. Credentials are only offered once that key is pinned, \
+                        and no shell or command is ever started.
+                        """)
+                }
+
                 Section("Organisation") {
                     LabeledField("Group", text: $host.group, placeholder: "homelab")
                     LabeledField("Tags", text: $tagText, placeholder: "linux, pi", autocorrect: false)
@@ -218,6 +235,9 @@ struct HostEditorView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }.disabled(!isValid)
                 }
+            }
+            .sheet(isPresented: $testing) {
+                ConnectionTestView(host: host)
             }
             .onAppear {
                 tagText = host.tags.joined(separator: ", ")

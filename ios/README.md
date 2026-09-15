@@ -103,6 +103,66 @@ Two build settings are load-bearing and both were learned the hard way:
   `ios-arm64` and `ios-arm64-simulator` only, so an x86_64 simulator slice has
   nothing to link against.
 
+## Which algorithms this app can negotiate
+
+swift-nio-ssh ships two ciphers — `aes128-gcm@openssh.com` and
+`aes256-gcm@openssh.com` — and nothing else, which is fine against a modern
+OpenSSH and useless against a router, a NAS appliance or a Dropbear box. Those
+offer AES-CTR with an HMAC, share no cipher with the stock client, and fail the
+handshake with `NIOSSHError.keyExchangeNegotiationFailure` and no further
+explanation.
+
+`Sources/SSH/Transport/` adds `aes256-ctr`, `aes192-ctr` and `aes128-ctr` paired
+with `hmac-sha2-256`, in both RFC 4253's MAC-then-encrypt ordering and OpenSSH's
+`-etm@openssh.com` encrypt-then-MAC one. AES-CTR comes from CommonCrypto used as
+an ECB block oracle with the counter kept in Swift; the MACs are CryptoKit. GCM
+stays first in the offer, so nothing that worked before negotiates anything
+weaker.
+
+| | Supported |
+|---|---|
+| Key exchange | `ecdh-sha2-nistp384`, `ecdh-sha2-nistp256`, `ecdh-sha2-nistp521`, `curve25519-sha256` — swift-nio-ssh's list, which has no extension point |
+| Host keys | `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521` — likewise fixed by the library |
+| Ciphers | `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, `aes256-ctr`, `aes192-ctr`, `aes128-ctr` |
+| MACs | `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-256` (an AEAD negotiates none) |
+
+**`hmac-sha2-512` and `chacha20-poly1305@openssh.com` are implemented and tested
+but not offered by default**, and the reason is a limitation worth knowing
+about. swift-nio-ssh 0.15 derives session keys by truncating a *single*
+key-exchange hash rather than running RFC 4253 §7.2's expansion loop, so it can
+never produce more key material than that hash is long: 32 bytes under
+`curve25519-sha256` and `ecdh-sha2-nistp256`, 48 under `ecdh-sha2-nistp384`, 64
+only under `ecdh-sha2-nistp521`. Both of those need a 64-byte key. Since the
+library's own first key-exchange preference is `ecdh-sha2-nistp384`, the ceiling
+against any ordinary server is 48 bytes, and offering a cipher whose key cannot
+then be derived would turn a working handshake into an assertion failure inside
+the library. They are offered only after a probe of the server confirms the
+exchange will be `ecdh-sha2-nistp521`.
+
+`chacha20-poly1305@openssh.com` has a second, independent blocker:
+`NIOSSHTransportProtection.decryptFirstBlock(_:)` must leave the packet length
+in plaintext and is handed no sequence number — but the sequence number *is* the
+nonce the length was encrypted under. The protocol has no shape that cipher fits
+into. Its construction ships tested as `ChaCha20Poly1305OpenSSH`, ready for the
+day the library can host it.
+
+### When it still cannot connect
+
+A server announces its whole algorithm menu in the clear, before anything is
+negotiated or authenticated. So when a handshake fails on negotiation, the app
+goes and reads it: `SSHServerProbe` takes the banner and `SSH_MSG_KEXINIT`, and
+`SSHAlgorithmMismatch` does the comparison the library threw away — which of the
+four negotiations failed, what each side offered, what is missing, and the fix.
+RSA-only host keys, finite-field Diffie-Hellman and the key-derivation ceiling
+above each get their own sentence.
+
+The same machinery is a button: **Test connection**, in the host editor. It
+reports reachability, the banner, the whole offer, what would be negotiated, and
+the host key fingerprint. It offers a credential only when that fingerprint is
+already pinned and matches — a diagnostic that sends your password to whatever
+answered the port is worse than no diagnostic — and it never starts a shell or
+runs a command.
+
 ## Security model of the vault
 
 | Thing | Where it lives |
@@ -276,6 +336,8 @@ nothing at all when it is off. Scrolling terminal output is deliberately silent.
 | Gestures | Pinch to resize the font, pan to scroll the viewport through scrollback, long-press-and-drag to select, stationary long-press or two-finger tap for the edit menu (Copy / Paste / Select All / Select Word / Select Input / Select Output) |
 | Paste | Bracketed-paste aware, unsafe-paste confirmation |
 | SSH | Connect, host key verification, `pty-req` (configurable TERM), `env`, `shell` or `exec`, `window-change`, clean disconnect, bounded reconnect with backoff |
+| Ciphers | `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, and `aes256/192/128-ctr` with `hmac-sha2-256` in both the plain and `-etm@openssh.com` orderings — so servers with no AEAD (routers, NAS boxes, Dropbear) are reachable |
+| Diagnostics | **Test connection** in the host editor: banner, the server's whole algorithm list, what would be negotiated, the host key fingerprint, and whether the credentials work — without opening a shell. A failed negotiation explains itself in plain language instead of `keyExchangeNegotiationFailure` |
 | Auth | Password (stored or prompted), public key: Ed25519, ECDSA P-256/384/521, **Secure Enclave P-256** |
 | Keys | Generate in-app, import unencrypted openssh-key-v1 (paste or Files), export/copy/share the public line, delete with confirmation, SHA256 fingerprints |
 | Vault | Hosts with alias/group/tags/colour/TERM/font size/startup command/notes, known-hosts list with forget |
