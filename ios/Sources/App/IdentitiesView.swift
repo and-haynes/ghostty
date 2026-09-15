@@ -3,7 +3,6 @@ import UniformTypeIdentifiers
 
 struct IdentitiesView: View {
     @EnvironmentObject private var vault: Vault
-    @EnvironmentObject private var settings: AppSettings
 
     @State private var showingGenerate = false
     @State private var showingImport = false

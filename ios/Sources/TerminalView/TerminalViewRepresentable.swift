@@ -8,11 +8,14 @@ struct TerminalViewRepresentable: UIViewRepresentable {
     var onUnsafePaste: ((String, @escaping (Bool) -> Void) -> Void)?
     /// Set to true to make the terminal take the keyboard when it appears.
     var focusOnAppear: Bool = true
+    /// Whether to show the accessory key bar (Settings ▸ Input).
+    var keyBarEnabled: Bool = true
 
     func makeUIView(context: Context) -> TerminalUIView {
         let view = TerminalUIView(frame: .zero)
         view.session = session
         view.onUnsafePaste = onUnsafePaste
+        view.keyBarEnabled = keyBarEnabled
         view.onFontSizeChanged = { size in
             // Keep the observable in step so the settings screen and any other
             // view of this session agree with what the pinch just did.
@@ -29,6 +32,7 @@ struct TerminalViewRepresentable: UIViewRepresentable {
             view.session = session
         }
         view.onUnsafePaste = onUnsafePaste
+        view.keyBarEnabled = keyBarEnabled
         if abs(view.fontSet.size - session.fontSize) > 0.01 {
             view.setFontSize(session.fontSize)
         }
@@ -38,13 +42,18 @@ struct TerminalViewRepresentable: UIViewRepresentable {
 /// A terminal plus its status bar — what the sessions tab shows.
 struct TerminalScreen: View {
     @ObservedObject var session: TerminalSession
+    @EnvironmentObject private var settings: AppSettings
     @State private var unsafePaste: UnsafePastePrompt?
 
     var body: some View {
         VStack(spacing: 0) {
-            TerminalViewRepresentable(session: session) { text, respond in
-                unsafePaste = UnsafePastePrompt(text: text, respond: respond)
-            }
+            TerminalViewRepresentable(
+                session: session,
+                onUnsafePaste: settings.confirmUnsafePaste
+                    ? { text, respond in unsafePaste = UnsafePastePrompt(text: text, respond: respond) }
+                    : nil,
+                keyBarEnabled: settings.keyBarEnabled
+            )
             .ignoresSafeArea(.container, edges: .bottom)
 
             statusBar

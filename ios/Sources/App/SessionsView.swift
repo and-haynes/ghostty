@@ -3,7 +3,6 @@ import SwiftUI
 struct SessionsView: View {
     @EnvironmentObject private var sessions: SessionManager
     @EnvironmentObject private var settings: AppSettings
-    @EnvironmentObject private var vault: Vault
 
     var body: some View {
         NavigationStack {

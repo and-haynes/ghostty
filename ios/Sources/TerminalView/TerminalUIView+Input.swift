@@ -12,7 +12,7 @@ import UIKit
 extension TerminalUIView: UIKeyInput, UITextInputTraits {
     override var canBecomeFirstResponder: Bool { true }
 
-    override var inputAccessoryView: UIView? { keyBarView }
+    override var inputAccessoryView: UIView? { keyBarEnabled ? keyBarView : nil }
 
     var hasText: Bool { true }
 
