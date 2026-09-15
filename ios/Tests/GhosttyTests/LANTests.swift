@@ -593,6 +593,31 @@ final class LANImportTests: XCTestCase {
         XCTAssertTrue(vault.localServices.isEmpty)
     }
 
+    func testARefreshRepairsAHostSavedWithoutAUsername() {
+        // The state an earlier bug left behind: a Local host nobody can
+        // connect to. A re-scan should fix it rather than refresh it forever.
+        var broken = Host(alias: "10.0.0.41", hostname: "10.0.0.41", port: 22, username: "")
+        broken.group = Host.localGroup
+        vault.upsert(broken)
+
+        let summary = LANImporter.import(
+            results(), into: vault, username: "andy", term: "xterm-256color"
+        )
+
+        XCTAssertEqual(summary.hostsRefreshed, 1)
+        XCTAssertEqual(vault.hosts.count, 1)
+        XCTAssertEqual(vault.hosts.first?.username, "andy")
+        XCTAssertNotNil(vault.hosts.first?.lastSeen)
+    }
+
+    func testARefreshLeavesAGoodUsernameAlone() {
+        var manual = Host(alias: "work", hostname: "10.0.0.41", port: 22, username: "me")
+        manual.group = "Work"
+        vault.upsert(manual)
+        LANImporter.import(results(), into: vault, username: "andy", term: "xterm-256color")
+        XCTAssertEqual(vault.hosts.first?.username, "me")
+    }
+
     func testTypedUsernameBeatsTheVaultDefault() {
         vault.upsert(Host(alias: "noether", hostname: "10.0.0.81", username: "andy"))
         LANImporter.import(results(), into: vault, username: " root ", term: "xterm-256color")

@@ -63,7 +63,18 @@ enum LANImporter {
                 if let existing = vault.hosts.first(
                     where: { $0.hostname == result.address && $0.port == open.port }
                 ) {
-                    vault.markSeen(existing, at: result.lastSeen)
+                    // A host saved without a username is unusable, and a
+                    // refresh is the natural moment to repair one -- otherwise
+                    // a record written by an earlier mistake stays broken
+                    // forever, because every later scan only refreshes it.
+                    if existing.username.isEmpty {
+                        var repaired = existing
+                        repaired.username = user
+                        repaired.lastSeen = result.lastSeen
+                        vault.upsert(repaired)
+                    } else {
+                        vault.markSeen(existing, at: result.lastSeen)
+                    }
                     summary.hostsRefreshed += 1
                     continue
                 }
