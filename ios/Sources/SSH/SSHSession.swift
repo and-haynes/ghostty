@@ -432,13 +432,83 @@ final class SSHSession: ObservableObject {
         self.exitStatus = nil
         self.lastError = nil
 
-        try await self.establish(request, auth: auth, publishesProgress: true)
+        do {
+            try await self.establish(request, auth: auth, publishesProgress: true)
+        } catch let error as SSHError {
+            guard case .negotiationFailed = error else { throw error }
+            try await self.retryOrExplainNegotiationFailure(error, request: request, auth: auth)
+        }
+    }
+
+    /// Turn a bare negotiation failure into either a working connection or an
+    /// explanation.
+    ///
+    /// swift-nio-ssh reports "no algorithm in common" as
+    /// `NIOSSHError.keyExchangeNegotiationFailure` and nothing else — not which
+    /// of the four negotiations failed, not what the server wanted. The server's
+    /// whole menu is sent in the clear before any negotiation, though, so we can
+    /// simply go and read it.
+    ///
+    /// Two things come out of that:
+    ///
+    /// * **A retry that can succeed.** Some ciphers and MACs need a 64-byte
+    ///   session key, which swift-nio-ssh can only derive when the key exchange
+    ///   is `ecdh-sha2-nistp521` (it truncates one hash rather than expanding
+    ///   it). Offering them unconditionally would let a handshake negotiate a
+    ///   key that cannot be derived — but once the probe says this server's
+    ///   exchange *will* be nistp521, offering them is safe and is the only way
+    ///   such a server is reachable at all.
+    /// * **An error worth reading**, naming the server's algorithms, ours, and
+    ///   what is missing.
+    private func retryOrExplainNegotiationFailure(
+        _ failure: SSHError,
+        request: SSHConnectionRequest,
+        auth: [SSHAuthMethod]
+    ) async throws {
+        let offer: SSHServerOffer
+        do {
+            offer = try await SSHServerProbe.read(host: request.hostname, port: request.port)
+        } catch {
+            // The probe is a diagnostic, not a dependency: if it cannot reach
+            // the server either, report the original failure unembellished.
+            self.publish(failure: failure)
+            throw failure
+        }
+
+        let hashBytes = SSHAlgorithmSupport.negotiatedKeyExchange(with: offer)?.hashBytes ?? 0
+        if hashBytes >= 64 {
+            let extended = SSHTransportProtectionCatalog.schemes(keyExchangeHashBytes: hashBytes)
+            let widened = SSHAlgorithmMismatch(
+                hostname: request.hostname,
+                offer: offer,
+                supportedCiphers: SSHTransportProtectionCatalog.cipherNames(extended),
+                supportedMACs: SSHTransportProtectionCatalog.macNames(extended)
+            )
+            if widened.canNegotiate {
+                try await self.establish(
+                    request,
+                    auth: auth,
+                    publishesProgress: true,
+                    schemes: extended
+                )
+                return
+            }
+        }
+
+        let mismatch = SSHAlgorithmMismatch(hostname: request.hostname, offer: offer)
+        let explained = SSHError.negotiationFailed(
+            headline: mismatch.summary,
+            detail: mismatch.explanation
+        )
+        self.publish(failure: explained)
+        throw explained
     }
 
     private func establish(
         _ request: SSHConnectionRequest,
         auth: [SSHAuthMethod],
-        publishesProgress: Bool
+        publishesProgress: Bool,
+        schemes: [NIOSSHTransportProtection.Type] = SSHTransportProtectionCatalog.clientSchemes
     ) async throws {
         self.generation &+= 1
         let generation = self.generation
@@ -506,7 +576,14 @@ final class SSHSession: ObservableObject {
                         role: .client(
                             SSHClientConfiguration(
                                 userAuthDelegate: authDelegate,
-                                serverAuthDelegate: hostKeyDelegate
+                                serverAuthDelegate: hostKeyDelegate,
+                                globalRequestDelegate: nil,
+                                // swift-nio-ssh offers the two OpenSSH AES-GCM
+                                // modes and nothing else, which leaves every
+                                // router, NAS and Dropbear box unreachable.
+                                // See `SSHTransportProtectionCatalog` for what
+                                // this adds and the order it adds it in.
+                                transportProtectionSchemes: schemes
                             )
                         ),
                         allocator: channel.allocator,
@@ -832,7 +909,10 @@ final class SSHSession: ObservableObject {
         case .connectionFailed, .channelClosed, .notConnected:
             return true
         case .hostKeyMismatch, .hostKeyRejectedByUser, .authenticationFailed,
-            .noAuthenticationMethods, .keyboardInteractiveUnsupported, .rsaKeysUnsupported:
+            .noAuthenticationMethods, .keyboardInteractiveUnsupported, .rsaKeysUnsupported,
+            .negotiationFailed:
+            // An algorithm mismatch is a configuration fact, not a blip. Every
+            // retry would fail identically and cost the user twenty seconds.
             return false
         }
     }
@@ -950,6 +1030,15 @@ final class SSHSession: ObservableObject {
             return sshError
         }
         if let nioSSHError = error as? NIOSSHError {
+            // Keep this one distinguishable: it is the only handshake failure
+            // with a specific, readable explanation available, and `connect`
+            // goes and fetches it.
+            if nioSSHError.type == .keyExchangeNegotiationFailure {
+                return .negotiationFailed(
+                    headline: "No encryption algorithm in common.",
+                    detail: nil
+                )
+            }
             return .connectionFailed("The SSH handshake failed: \(nioSSHError).")
         }
         if let channelError = error as? ChannelError {

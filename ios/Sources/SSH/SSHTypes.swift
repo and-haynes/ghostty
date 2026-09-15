@@ -171,6 +171,11 @@ enum SSHError: Error, LocalizedError, Equatable, Sendable {
     /// The server will only do keyboard-interactive, which NIOSSH cannot do.
     case keyboardInteractiveUnsupported
     case rsaKeysUnsupported
+    /// Client and server share no cipher, MAC, host key or key exchange
+    /// algorithm. `detail` is the full explanation from ``SSHAlgorithmMismatch``
+    /// once the server's own algorithm list has been read; it is nil when the
+    /// handshake failed before we had a chance to ask.
+    case negotiationFailed(headline: String, detail: String?)
     case channelClosed(String?)
     case notConnected
     case connectionFailed(String)
@@ -228,6 +233,19 @@ enum SSHError: Error, LocalizedError, Equatable, Sendable {
                 key and add it to the server's authorized_keys.
                 """
 
+        case .negotiationFailed(let headline, let detail):
+            guard let detail, !detail.isEmpty else {
+                return """
+                    \(headline)
+
+                    Ghostty and this server have no encryption algorithm in common, \
+                    so the connection was refused before anything was sent. Use \
+                    "Test connection" in the host's settings to see exactly which \
+                    algorithms the server offers.
+                    """
+            }
+            return detail
+
         case .channelClosed(let detail):
             guard let detail, !detail.isEmpty else {
                 return "The remote session closed."
@@ -255,6 +273,7 @@ extension SSHError {
         case .noAuthenticationMethods: return "No credentials"
         case .keyboardInteractiveUnsupported: return "Unsupported authentication"
         case .rsaKeysUnsupported: return "RSA keys unsupported"
+        case .negotiationFailed: return "No algorithm in common"
         case .channelClosed: return "Session closed"
         case .notConnected: return "Not connected"
         case .connectionFailed: return "Connection failed"
