@@ -222,6 +222,99 @@ final class ScreenshotTests: XCTestCase {
         dismissAnyMenu(app)
     }
 
+    /// 13. The session status line and the key bar, with the keyboard up.
+    ///
+    /// #008A2: on Andy's phone these two drew on top of each other, so neither
+    /// was readable. The status line must sit *above* the key bar, and the key
+    /// bar must be the only thing in the row immediately above the keyboard.
+    func testStatusLineSitsAboveTheKeyBar() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ghostty-seed"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Hosts"].waitForExistence(timeout: 30), "the app should launch")
+
+        // Any session will do — this is about layout, not about the far end —
+        // so a host that fails to connect still gives us a terminal screen.
+        let host = app.cells.buttons.firstMatch
+        guard host.waitForExistence(timeout: 10) else {
+            reportHierarchy(app, step: "a host to connect to")
+            return
+        }
+        host.tap()
+        if app.alerts.firstMatch.waitForExistence(timeout: 25) {
+            app.alerts.firstMatch.buttons.element(boundBy: 0).tap()
+        }
+
+        app.tabBars.buttons["Sessions"].tap()
+        _ = app.navigationBars["Sessions"].waitForExistence(timeout: 10)
+        let row = app.cells.firstMatch
+        guard row.waitForExistence(timeout: 10) else {
+            reportHierarchy(app, step: "a session row")
+            return
+        }
+        row.tap()
+        Thread.sleep(forTimeInterval: 1.5)
+
+        // Raise the keyboard, which is what brings the key bar with it.
+        focusTerminal(app)
+        Thread.sleep(forTimeInterval: 1.5)
+        capture(app, named: "13-status-vs-keybar")
+
+        guard app.keyboards.count > 0 else {
+            reportHierarchy(app, step: "software keyboard on a session")
+            return
+        }
+        let keyBar = app.buttons["Esc"].exists ? app.buttons["Esc"] : app.buttons["esc"]
+        guard keyBar.waitForExistence(timeout: 5) else {
+            reportHierarchy(app, step: "key bar")
+            return
+        }
+        let status = app.descendants(matching: .any)
+            .matching(identifier: "session-status-bar").firstMatch
+        guard status.waitForExistence(timeout: 5) else {
+            reportHierarchy(app, step: "the session status line")
+            return
+        }
+
+        XCTAssertLessThanOrEqual(
+            status.frame.maxY, keyBar.frame.minY + 1,
+            """
+            the status line (\(status.frame)) must end above the key bar \
+            (\(keyBar.frame)); overlapping makes both unreadable
+            """
+        )
+
+        // Landscape: the safe area and the keyboard height both change, and a
+        // fixed offset would show up here.
+        XCUIDevice.shared.orientation = .landscapeLeft
+        Thread.sleep(forTimeInterval: 2.0)
+        if keyBar.exists, status.exists, app.keyboards.count > 0 {
+            capture(app, named: "13b-status-vs-keybar-landscape")
+            XCTAssertLessThanOrEqual(
+                status.frame.maxY, keyBar.frame.minY + 1,
+                "the status line must stay above the key bar in landscape too"
+            )
+        } else {
+            reportHierarchy(app, step: "key bar in landscape")
+        }
+        XCUIDevice.shared.orientation = .portrait
+        Thread.sleep(forTimeInterval: 2.0)
+
+        // Keyboard hidden: the key bar goes with it, and the status line must
+        // still be on screen and inside the safe area rather than under the
+        // home indicator.
+        if app.buttons["Hide keyboard"].exists {
+            app.buttons["Hide keyboard"].tap()
+            Thread.sleep(forTimeInterval: 1.5)
+        }
+        let window = app.children(matching: .window).element(boundBy: 0)
+        XCTAssertTrue(status.exists, "the status line must survive the keyboard going away")
+        XCTAssertLessThanOrEqual(
+            status.frame.maxY, window.frame.maxY,
+            "the status line must not be pushed off the bottom of the window"
+        )
+    }
+
     /// The edit menu's Paste item.
     ///
     /// Deliberately scoped to the menu rather than asking the app for any

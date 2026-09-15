@@ -92,6 +92,18 @@ final class TerminalUIView: UIView {
 
     private var editMenuInteraction: UIEditMenuInteraction?
 
+    /// How much of the window's bottom edge the keyboard — *including* the key
+    /// bar hanging off it — currently covers, in points.
+    ///
+    /// Published because SwiftUI's own keyboard avoidance gets this wrong when
+    /// an `inputAccessoryView` is involved: in landscape it under-insets by
+    /// roughly the accessory's height, which is what put the session status
+    /// line underneath the key bar (#008A2). Measured in *window* coordinates
+    /// so the value does not depend on this view's own frame, which is what
+    /// stops the correction from feeding back into the layout that produced it.
+    var onKeyboardOverlapChanged: ((CGFloat) -> Void)?
+    private var keyboardOverlap: CGFloat = 0
+
     /// The input/output ranges offered while a selection is live.
     private var suggestion: SelectionSuggestion?
     private lazy var chipBar: SelectionChipBar = {
@@ -162,6 +174,21 @@ final class TerminalUIView: UIView {
         let interaction = UIEditMenuInteraction(delegate: self)
         addInteraction(interaction)
         editMenuInteraction = interaction
+
+        // The keyboard frame in these notifications already includes the input
+        // accessory view, which is the number we need and the one
+        // `keyboardLayoutGuide` is built on.
+        for name in [
+            UIResponder.keyboardWillChangeFrameNotification,
+            UIResponder.keyboardWillHideNotification,
+        ] {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardFrameChanged(_:)),
+                name: name,
+                object: nil
+            )
+        }
 
         addSubview(chipBar)
         addSubview(keyboardButton)
@@ -708,6 +735,33 @@ final class TerminalUIView: UIView {
             UInt8(max(0, min(255, Double(a) * (1 - amount) + Double(b) * amount)))
         }
         return VTColor(r: mix(color.r, other.r), g: mix(color.g, other.g), b: mix(color.b, other.b))
+    }
+
+    // MARK: Keyboard geometry
+
+    @objc private func keyboardFrameChanged(_ note: Notification) {
+        guard let window else { return }
+        let overlap: CGFloat
+        if note.name == UIResponder.keyboardWillHideNotification {
+            overlap = 0
+        } else if let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+            let inWindow = window.convert(end, from: nil)
+            // An undocked or floating keyboard (iPad) does not reach the bottom
+            // of the window, and its accessory view floats with it, so it
+            // covers nothing at the bottom edge. This is the same rule
+            // `UIKeyboardLayoutGuide.followsUndockedKeyboard = false` applies.
+            if inWindow.maxY < window.bounds.maxY - 1 {
+                overlap = 0
+            } else {
+                overlap = max(0, window.bounds.maxY - inWindow.minY)
+            }
+        } else {
+            return
+        }
+
+        guard abs(overlap - self.keyboardOverlap) > 0.5 else { return }
+        self.keyboardOverlap = overlap
+        self.onKeyboardOverlapChanged?(overlap)
     }
 
     // MARK: Gestures

@@ -402,8 +402,8 @@ on an iPhone 17 simulator.
 | The reorganised key bar with Ctrl armed and the `Fn` row open | The floating keyboard button, shown when the bar is collapsed |
 | ![Selection helper](docs/screenshots/09-selection-helper.png) | ![Sync](docs/screenshots/10-sync-settings.png) |
 | Input/output bands and the selection chips | Sync providers in Settings |
-| ![Paste menu](docs/screenshots/14-paste-menu.png) | |
-| The edit menu on a stationary long press — Paste, Select All, Select Word, and the input/output selections behind the chevron | |
+| ![Paste menu](docs/screenshots/14-paste-menu.png) | ![Status line and key bar](docs/screenshots/13-status-vs-keybar.png) |
+| The edit menu on a stationary long press — Paste, Select All, Select Word, and the input/output selections behind the chevron | The session status line above the key bar, which is the sole occupant of the row above the keyboard |
 
 ## Toolchain
 

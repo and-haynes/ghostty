@@ -10,12 +10,16 @@ struct TerminalViewRepresentable: UIViewRepresentable {
     var focusOnAppear: Bool = true
     /// Whether to show the accessory key bar (Settings ▸ Input).
     var keyBarEnabled: Bool = true
+    /// Reports how much of the window's bottom edge the keyboard and key bar
+    /// cover, so the owner can inset for it. See `TerminalScreen`.
+    var onKeyboardOverlapChanged: ((CGFloat) -> Void)?
 
     func makeUIView(context: Context) -> TerminalUIView {
         let view = TerminalUIView(frame: .zero)
         view.session = session
         view.onUnsafePaste = onUnsafePaste
         view.keyBarEnabled = keyBarEnabled
+        view.onKeyboardOverlapChanged = onKeyboardOverlapChanged
         view.onFontSizeChanged = { size in
             // Keep the observable in step so the settings screen and any other
             // view of this session agree with what the pinch just did.
@@ -33,6 +37,7 @@ struct TerminalViewRepresentable: UIViewRepresentable {
         }
         view.onUnsafePaste = onUnsafePaste
         view.keyBarEnabled = keyBarEnabled
+        view.onKeyboardOverlapChanged = onKeyboardOverlapChanged
         if abs(view.fontSet.size - session.fontSize) > 0.01 {
             view.setFontSize(session.fontSize)
         }
@@ -44,21 +49,50 @@ struct TerminalScreen: View {
     @ObservedObject var session: TerminalSession
     @EnvironmentObject private var settings: AppSettings
     @State private var unsafePaste: UnsafePastePrompt?
+    /// Measured by the terminal view from the real keyboard frame. See the
+    /// comment in `body` for why SwiftUI's own number is not good enough.
+    @State private var keyboardOverlap: CGFloat = 0
 
     var body: some View {
+        // Layout, because it is the thing #008A2 was about. The key bar is the
+        // terminal's `inputAccessoryView`, so UIKit hangs it off the keyboard
+        // and its height is part of the keyboard frame SwiftUI insets for. That
+        // only helps if this stack actually stays inside the safe area.
+        //
+        // It used to not: `ignoresSafeArea(.container, edges: .bottom)` on the
+        // terminal grew it into the bottom inset, which pushed the status line
+        // down into the row the key bar occupies, and the two drew on top of
+        // each other. The background bleeds instead — it has no content to
+        // lose — and the stack itself is laid out honestly, which keeps the
+        // status line above the key bar in every keyboard state (hidden, shown,
+        // floating on iPad, hardware keyboard attached) and in both
+        // orientations, with no fixed offsets anywhere.
         VStack(spacing: 0) {
             TerminalViewRepresentable(
                 session: session,
                 onUnsafePaste: settings.confirmUnsafePaste
                     ? { text, respond in unsafePaste = UnsafePastePrompt(text: text, respond: respond) }
                     : nil,
-                keyBarEnabled: settings.keyBarEnabled
+                keyBarEnabled: settings.keyBarEnabled,
+                onKeyboardOverlapChanged: { overlap in
+                    guard abs(overlap - keyboardOverlap) > 0.5 else { return }
+                    keyboardOverlap = overlap
+                }
             )
-            .ignoresSafeArea(.container, edges: .bottom)
 
             statusBar
         }
-        .background(Color(session.theme.background.cgColor))
+        .padding(.bottom, keyboardOverlap)
+        // SwiftUI's own keyboard avoidance is switched off here on purpose. It
+        // under-insets when the first responder has an `inputAccessoryView` —
+        // in landscape by about the accessory's own height — which put the
+        // status line underneath the key bar and made both unreadable (#008A2).
+        // The padding above comes from the real keyboard frame, which UIKit
+        // reports with the accessory included, so the key bar is always the
+        // sole occupant of the row above the keyboard: hidden, shown, floating
+        // on iPad, or with a hardware keyboard attached, in both orientations.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .background(Color(session.theme.background.cgColor).ignoresSafeArea())
         .navigationTitle(session.title)
         .navigationBarTitleDisplayMode(.inline)
         .alert("Paste contains newlines", isPresented: .init(
@@ -87,7 +121,11 @@ struct TerminalScreen: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
         .background(.bar)
+        // Named so a UI test can assert where it sits relative to the key bar
+        // rather than guessing at its text.
+        .accessibilityIdentifier("session-status-bar")
     }
 
     private var statusColor: Color {
