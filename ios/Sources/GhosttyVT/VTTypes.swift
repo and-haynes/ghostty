@@ -111,11 +111,33 @@ struct VTCell: Equatable {
     }
 }
 
+/// Whether a row is part of a shell prompt, per OSC 133.
+///
+/// Only populated when the remote shell has shell integration; without it
+/// every row reports `.none`, which is why every feature built on this needs a
+/// working fallback rather than a graceful degradation to nothing.
+enum VTSemanticPrompt: Int32 {
+    case none = 0
+    case prompt = 1
+    case promptContinuation = 2
+
+    init(_ c: GhosttyRowSemanticPrompt) {
+        switch c {
+        case GHOSTTY_ROW_SEMANTIC_PROMPT: self = .prompt
+        case GHOSTTY_ROW_SEMANTIC_PROMPT_CONTINUATION: self = .promptContinuation
+        default: self = .none
+        }
+    }
+
+    var isPrompt: Bool { self != .none }
+}
+
 /// One viewport row of a frame.
 struct VTRow: Equatable {
     /// Row index within the viewport, 0 at the top.
     var y: Int
     var cells: [VTCell]
+    var semanticPrompt: VTSemanticPrompt = .none
 }
 
 enum VTCursorStyle: Int32 {

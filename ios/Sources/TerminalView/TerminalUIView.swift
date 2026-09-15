@@ -61,14 +61,46 @@ final class TerminalUIView: UIView {
 
     // MARK: Input state
 
-    lazy var keyBarView: TerminalKeyBar = {
-        let bar = TerminalKeyBar()
-        bar.delegate = self
-        return bar
+    let keyBarModel = KeyBarModel()
+
+    lazy var keyBarHost: KeyBarHost = {
+        let host = KeyBarHost(model: keyBarModel)
+        keyBarModel.onAction = { [weak self] action, mods in
+            self?.handleKeyBar(action, mods: mods)
+        }
+        return host
+    }()
+
+    /// Shown when the software keyboard is down, so the way back to it is
+    /// always one tap away rather than "tap the terminal and hope".
+    private lazy var keyboardButton: UIButton = {
+        var config = UIButton.Configuration.filled()
+        config.image = UIImage(systemName: "keyboard")
+        config.cornerStyle = .capsule
+        config.baseBackgroundColor = UIColor.tintColor.withAlphaComponent(0.85)
+        config.baseForegroundColor = .black
+        config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
+        let button = UIButton(configuration: config)
+        button.accessibilityLabel = "Show keyboard"
+        button.addAction(UIAction { [weak self] _ in
+            Haptics.shared.fire(.keyboardShow)
+            _ = self?.becomeFirstResponder()
+        }, for: .touchUpInside)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
     }()
 
     private var editMenuInteraction: UIEditMenuInteraction?
+
+    /// The input/output ranges offered while a selection is live.
+    private var suggestion: SelectionSuggestion?
+    private lazy var chipBar: SelectionChipBar = {
+        let bar = SelectionChipBar(frame: .zero)
+        bar.onSelect = { [weak self] chip in self?.applySuggestion(chip) }
+        return bar
+    }()
     private var selectionAnchor: (x: Int, y: Int)?
+    private var lastSelectionPoint: (x: Int, y: Int)?
     private var scrollAccumulator: CGFloat = 0
     private var pinchStartFontSize: CGFloat = 12
 
@@ -98,6 +130,11 @@ final class TerminalUIView: UIView {
         pan.maximumNumberOfTouches = 2
         addGestureRecognizer(pan)
 
+        // Warm the generators the gestures will need: a cold one fires late
+        // enough to read as a dropped tap.
+        Haptics.shared.prepare(for: .selectionStart)
+        Haptics.shared.prepare(for: .keyPress)
+
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress))
         longPress.minimumPressDuration = 0.35
         addGestureRecognizer(longPress)
@@ -110,6 +147,26 @@ final class TerminalUIView: UIView {
         let interaction = UIEditMenuInteraction(delegate: self)
         addInteraction(interaction)
         editMenuInteraction = interaction
+
+        addSubview(chipBar)
+        addSubview(keyboardButton)
+        NSLayoutConstraint.activate([
+            keyboardButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            keyboardButton.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -12),
+        ])
+        updateKeyboardButton()
+    }
+
+    /// The floating button is the inverse of the accessory bar: exactly one of
+    /// them is on screen at any moment.
+    func updateKeyboardButton() {
+        let shouldShow = !isFirstResponder
+        guard keyboardButton.isHidden == shouldShow else { return }
+        keyboardButton.isHidden = !shouldShow
+        keyboardButton.alpha = shouldShow ? 0 : 1
+        UIView.animate(withDuration: 0.2) {
+            self.keyboardButton.alpha = shouldShow ? 1 : 0
+        }
     }
 
     // MARK: Geometry
@@ -215,8 +272,10 @@ final class TerminalUIView: UIView {
     }
 
     private func bell() {
-        // No sound: a terminal that beeps in a pocket is a bad citizen.
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        // No sound: a terminal that beeps in a pocket is a bad citizen. A
+        // bespoke CoreHaptics pattern instead, so BEL is distinguishable from
+        // every other buzz the app makes.
+        Haptics.shared.fire(.bell)
     }
 
     // MARK: Drawing
@@ -227,6 +286,10 @@ final class TerminalUIView: UIView {
         ctx.setFillColor(model.background.cgColor)
         ctx.fill(rect)
         guard !lines.isEmpty else { return }
+
+        // Bands go under the text: they are a hint about *where* something is,
+        // not a highlight of it, and drawing them over would tint the glyphs.
+        drawSuggestionBands(in: ctx, clip: rect)
 
         let first = max(0, Int((rect.minY - padding.height) / fontSet.cellHeight))
         let last = min(lines.count - 1, Int((rect.maxY - padding.height) / fontSet.cellHeight))
@@ -240,6 +303,100 @@ final class TerminalUIView: UIView {
            cursor.y >= first, cursor.y <= last {
             drawCursor(cursor, in: ctx)
         }
+    }
+
+    /// Translucent bands behind the suggested row ranges.
+    private func drawSuggestionBands(in ctx: CGContext, clip: CGRect) {
+        guard let suggestion, !suggestion.isEmpty else { return }
+
+        func band(_ range: ClosedRange<Int>, color: UIColor, edge: UIColor) {
+            let top = padding.height + CGFloat(range.lowerBound) * fontSet.cellHeight
+            let height = CGFloat(range.count) * fontSet.cellHeight
+            let rowsRect = CGRect(x: 0, y: top, width: bounds.width, height: height)
+            guard rowsRect.intersects(clip) else { return }
+            ctx.setFillColor(color.cgColor)
+            ctx.fill(rowsRect)
+            // A leading edge makes the band readable at low alpha, where a
+            // flat wash over a dark theme is almost invisible.
+            ctx.setFillColor(edge.cgColor)
+            ctx.fill(CGRect(x: 0, y: top, width: 3, height: height))
+        }
+
+        if let output = suggestion.outputRows {
+            band(output, color: UIColor.label.withAlphaComponent(0.06), edge: UIColor.label.withAlphaComponent(0.35))
+        }
+        if let input = suggestion.inputRows {
+            band(input, color: UIColor.tintColor.withAlphaComponent(0.14), edge: UIColor.tintColor.withAlphaComponent(0.8))
+        }
+    }
+
+    // MARK: - Selection helper
+
+    private func showSuggestion(near point: CGPoint) {
+        let derived = SelectionSuggestion.derive(lines: lines, cursorRow: model.cursor?.y)
+        guard !derived.isEmpty else { return }
+        suggestion = derived
+        chipBar.configure(for: derived)
+        chipBar.setVisible(true)
+        positionChips(near: point)
+        setNeedsDisplay()
+    }
+
+    private func positionChips(near point: CGPoint) {
+        chipBar.sizeToFit()
+        let size = chipBar.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        let margin: CGFloat = 10
+        // Above the finger where there is room, below it near the top — the
+        // chips must never sit under the hand that is dragging.
+        let preferredY = point.y - size.height - 28
+        let y = preferredY < safeAreaInsets.top + margin
+            ? min(point.y + 36, bounds.height - size.height - margin)
+            : preferredY
+        let x = min(max(margin, point.x - size.width / 2), bounds.width - size.width - margin)
+        chipBar.frame = CGRect(origin: CGPoint(x: x, y: y), size: size)
+    }
+
+    private func hideSuggestion() {
+        guard suggestion != nil else { return }
+        suggestion = nil
+        chipBar.setVisible(false)
+        setNeedsDisplay()
+    }
+
+    private func applySuggestion(_ chip: SelectionChip) {
+        guard let session, let suggestion else { return }
+        let range: ClosedRange<Int>?
+        switch chip {
+        case .input: range = suggestion.inputRows
+        case .output: range = suggestion.outputRows
+        case .both: range = suggestion.bothRows
+        }
+        guard let range else { return }
+
+        // Prefer the semantic selectors when the shell reports prompt marks:
+        // they trim the prompt itself and take a wrapped command whole, which
+        // a row range cannot.
+        var applied = false
+        if suggestion.fromShellIntegration {
+            switch chip {
+            case .input:
+                applied = session.terminal.selectLine(atViewportX: 0, y: range.lowerBound)
+            case .output:
+                applied = session.terminal.selectOutput(atViewportX: 0, y: range.lowerBound)
+            case .both:
+                applied = false
+            }
+        }
+        if !applied {
+            applied = session.terminal.select(
+                from: (0, range.lowerBound),
+                to: (max(0, model.cols - 1), range.upperBound)
+            )
+        }
+        guard applied else { return }
+        session.invalidateRender()
+        Haptics.shared.fire(.selectionChip)
+        presentEditMenu(at: CGPoint(x: chipBar.frame.midX, y: chipBar.frame.maxY + 8))
     }
 
     private func drawRow(_ row: VTRow, at y: Int, in ctx: CGContext) {
@@ -522,6 +679,7 @@ final class TerminalUIView: UIView {
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         if let session, session.terminal.hasSelection {
             session.clearSelection()
+            hideSuggestion()
             return
         }
         if !isFirstResponder { becomeFirstResponder() }
@@ -553,12 +711,26 @@ final class TerminalUIView: UIView {
         case .began:
             selectionAnchor = point
             session.selectWord(atColumn: point.x, row: point.y)
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            Haptics.shared.fire(.selectionStart)
+            showSuggestion(near: gesture.location(in: self))
         case .changed:
             guard let anchor = selectionAnchor else { return }
+            // One tick per cell crossed, not per touch sample — a drag emits
+            // dozens of those a second.
+            let movedToNewCell = lastSelectionPoint.map { $0 != point } ?? true
+            if movedToNewCell {
+                lastSelectionPoint = point
+                Haptics.shared.fire(.selectionExtend)
+            }
             session.extendSelection(from: anchor, to: point)
         case .ended, .cancelled:
-            presentEditMenu(at: gesture.location(in: self))
+            lastSelectionPoint = nil
+            // When the helper is up, its chips already offer the useful
+            // actions and the system menu would sit on top of them. Tapping a
+            // chip presents the menu afterwards, so nothing is lost.
+            if suggestion == nil {
+                presentEditMenu(at: gesture.location(in: self))
+            }
         default:
             break
         }
@@ -586,6 +758,8 @@ final class TerminalUIView: UIView {
         guard let text = session?.selectedText, !text.isEmpty else { return }
         UIPasteboard.general.string = text
         session?.clearSelection()
+        hideSuggestion()
+        Haptics.shared.fire(.copyConfirmed)
     }
 
     @objc func pasteFromClipboard() {

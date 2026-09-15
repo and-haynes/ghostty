@@ -12,20 +12,18 @@ import UIKit
 extension TerminalUIView: UIKeyInput, UITextInputTraits {
     override var canBecomeFirstResponder: Bool { true }
 
-    override var inputAccessoryView: UIView? { keyBarEnabled ? keyBarView : nil }
+    override var inputAccessoryView: UIView? { keyBarEnabled ? keyBarHost : nil }
 
     var hasText: Bool { true }
 
     func insertText(_ text: String) {
         guard let session else { return }
-        let mods = keyBarView.consumeStickyMods()
-        session.sendText(text, mods: mods)
+        session.sendText(text, mods: keyBarModel.consumeMods())
     }
 
     func deleteBackward() {
         guard let session else { return }
-        let mods = keyBarView.consumeStickyMods()
-        session.sendKey(GHOSTTY_KEY_BACKSPACE, mods: mods)
+        session.sendKey(GHOSTTY_KEY_BACKSPACE, mods: keyBarModel.consumeMods())
     }
 
     // Terminals want raw bytes, not an autocorrected, capitalised,
@@ -85,11 +83,11 @@ extension TerminalUIView {
             }
 
             var mods = HIDKeyMap.mods(from: key.modifierFlags)
-            mods.formUnion(keyBarView.stickyMods)
+            mods.formUnion(keyBarModel.activeMods)
 
             if let mapped = HIDKeyMap.key(forHIDUsage: key.keyCode),
                HIDKeyMap.isNonTextKey(key.keyCode) {
-                _ = keyBarView.consumeStickyMods()
+                _ = keyBarModel.consumeMods()
                 session.sendKey(mapped, mods: mods)
                 continue
             }
@@ -99,7 +97,7 @@ extension TerminalUIView {
             // and for ctrl combinations iOS often delivers no text at all.
             if !mods.isDisjoint(with: [.ctrl, .alt, .command]),
                let character = key.charactersIgnoringModifiers.first {
-                _ = keyBarView.consumeStickyMods()
+                _ = keyBarModel.consumeMods()
                 let logical = HIDKeyMap.key(forCharacter: character)
                 session.sendKey(
                     logical,
@@ -122,11 +120,9 @@ extension TerminalUIView {
 
 // MARK: - Key bar
 
-extension TerminalUIView: TerminalKeyBarDelegate {
-    func keyBar(_ bar: TerminalKeyBar, didPress action: TerminalKeyBar.Action) {
+extension TerminalUIView {
+    func handleKeyBar(_ action: KeyBarAction, mods: VTMods) {
         guard let session else { return }
-        let mods = bar.consumeStickyMods()
-
         switch action {
         case .escape: session.sendKey(GHOSTTY_KEY_ESCAPE, mods: mods)
         case .tab: session.sendKey(GHOSTTY_KEY_TAB, mods: mods)
@@ -138,15 +134,28 @@ extension TerminalUIView: TerminalKeyBarDelegate {
         case .end: session.sendKey(GHOSTTY_KEY_END, mods: mods)
         case .pageUp: session.sendKey(GHOSTTY_KEY_PAGE_UP, mods: mods)
         case .pageDown: session.sendKey(GHOSTTY_KEY_PAGE_DOWN, mods: mods)
+        case .function(let index):
+            guard let key = HIDKeyMap.functionKey(index) else { return }
+            session.sendKey(key, mods: mods)
         case .literal(let text): session.sendText(text, mods: mods)
         case .paste: pasteFromClipboard()
         case .hideKeyboard: resignFirstResponder()
         }
     }
 
-    func keyBarDidChangeStickyMods(_ bar: TerminalKeyBar) {
-        // Nothing to do: the bar draws its own armed state. Hook point for a
-        // future status-bar indicator.
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        updateKeyboardButton()
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        // A modifier armed for a key you never pressed should not survive the
+        // keyboard going away and surprise the next thing you type.
+        keyBarModel.clearMods()
+        updateKeyboardButton()
+        return resigned
     }
 }
 

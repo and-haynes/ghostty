@@ -365,3 +365,43 @@ extension VTTerminal {
         )
     }
 }
+
+// MARK: - Semantic selection
+
+extension VTTerminal {
+    /// Select the line under a viewport coordinate.
+    ///
+    /// With `semanticBoundary` and a shell that emits OSC 133, this is the
+    /// command line rather than the visual row — the prompt itself is excluded
+    /// and a wrapped command is taken whole.
+    func selectLine(atViewportX x: Int, y: Int, semanticBoundary: Bool = true) -> Bool {
+        guard let ref = gridRef(viewportX: x, y: y) else { return false }
+        var options = GhosttyTerminalSelectLineOptions()
+        options.size = MemoryLayout<GhosttyTerminalSelectLineOptions>.size
+        options.ref = ref
+        options.semantic_prompt_boundary = semanticBoundary
+        var selection = GhosttySelection()
+        selection.size = MemoryLayout<GhosttySelection>.size
+        guard ghostty_terminal_select_line(handle, &options, &selection) == GHOSTTY_SUCCESS
+        else { return false }
+        return ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &selection) == GHOSTTY_SUCCESS
+    }
+
+    /// Select the command output containing a viewport coordinate. Requires
+    /// OSC 133 marks; returns false without them.
+    func selectOutput(atViewportX x: Int, y: Int) -> Bool {
+        guard let ref = gridRef(viewportX: x, y: y) else { return false }
+        var selection = GhosttySelection()
+        selection.size = MemoryLayout<GhosttySelection>.size
+        guard ghostty_terminal_select_output(handle, ref, &selection) == GHOSTTY_SUCCESS
+        else { return false }
+        return ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_SELECTION, &selection) == GHOSTTY_SUCCESS
+    }
+
+    /// Whether the shell is reporting prompt boundaries (OSC 133).
+    var hasShellIntegration: Bool {
+        var atPrompt = false
+        ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT, &atPrompt)
+        return atPrompt
+    }
+}

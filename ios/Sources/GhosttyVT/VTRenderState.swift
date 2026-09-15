@@ -123,13 +123,13 @@ final class VTRenderState {
         if wantsFull {
             var y = 0
             while ghostty_render_state_row_iterator_next(rowIterator) {
-                frame.lines.append(VTRow(y: y, cells: readCurrentRow(columns: frame.cols)))
+                frame.lines.append(readRow(y: y, columns: frame.cols))
                 y += 1
             }
         } else {
             var y: UInt16 = 0
             while ghostty_render_state_row_iterator_next_dirty(rowIterator, &y) {
-                frame.lines.append(VTRow(y: Int(y), cells: readCurrentRow(columns: frame.cols)))
+                frame.lines.append(readRow(y: Int(y), columns: frame.cols))
             }
         }
 
@@ -139,6 +139,27 @@ final class VTRenderState {
     }
 
     // MARK: - Cell decoding
+
+    private func readRow(y: Int, columns: Int) -> VTRow {
+        VTRow(
+            y: y,
+            cells: readCurrentRow(columns: columns),
+            semanticPrompt: readSemanticPrompt()
+        )
+    }
+
+    /// OSC 133 prompt marking for the row the iterator is on.
+    private func readSemanticPrompt() -> VTSemanticPrompt {
+        var raw: GhosttyRow = 0
+        guard ghostty_render_state_row_get(
+            rowIterator, GHOSTTY_RENDER_STATE_ROW_DATA_RAW, &raw
+        ) == GHOSTTY_SUCCESS else { return .none }
+
+        var value = GHOSTTY_ROW_SEMANTIC_NONE
+        guard ghostty_row_get(raw, GHOSTTY_ROW_DATA_SEMANTIC_PROMPT, &value) == GHOSTTY_SUCCESS
+        else { return .none }
+        return VTSemanticPrompt(value)
+    }
 
     private func readCurrentRow(columns: Int) -> [VTCell] {
         // Row-local selection is one call per row instead of one per cell.
