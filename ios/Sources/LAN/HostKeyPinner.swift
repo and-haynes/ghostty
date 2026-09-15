@@ -61,8 +61,20 @@ final class HostKeyPinner: ObservableObject {
         isRunning = false
     }
 
+    /// Awaiting this awaits the whole batch; `cancel()` stops it.
+    ///
+    /// The work runs inside a task we keep hold of, because `Task.isCancelled`
+    /// in the loop below only means anything if something can cancel *this*
+    /// task rather than whichever one happened to call us.
     func pin(_ hosts: [Host]) async {
         guard !hosts.isEmpty, !isRunning else { return }
+        let running = Task { await self.run(hosts) }
+        task = running
+        await running.value
+        task = nil
+    }
+
+    private func run(_ hosts: [Host]) async {
         isRunning = true
         progress = 0
         results = []
