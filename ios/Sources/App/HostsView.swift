@@ -5,8 +5,6 @@ struct HostsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var sessions: SessionManager
 
-    var onConnected: () -> Void
-
     @State private var search = ""
     @State private var editing: Host?
     @State private var showingNew = false
@@ -64,9 +62,13 @@ struct HostsView: View {
                         .buttonStyle(.plain)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
+                                Haptics.shared.fire(.listAction)
                                 vault.deleteHost(host)
                             } label: { Label("Delete", systemImage: "trash") }
-                            Button { editing = host } label: { Label("Edit", systemImage: "pencil") }
+                            Button {
+                                Haptics.shared.fire(.listAction)
+                                editing = host
+                            } label: { Label("Edit", systemImage: "pencil") }
                                 .tint(.blue)
                         }
                     }
@@ -94,8 +96,9 @@ struct HostsView: View {
 
     private func connect(_ host: Host) {
         do {
+            // The Sessions tab comes forward via SessionManager's tab request,
+            // so the caller does not have to know about navigation.
             try sessions.connect(to: host)
-            onConnected()
         } catch {
             errorMessage = error.localizedDescription
         }

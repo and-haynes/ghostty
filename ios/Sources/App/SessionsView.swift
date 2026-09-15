@@ -9,12 +9,9 @@ struct SessionsView: View {
             Group {
                 if sessions.sessions.isEmpty {
                     ContentUnavailableView {
-                        Label("No sessions", systemImage: "terminal")
+                        Label("No sessions", systemImage: "rectangle.stack")
                     } description: {
-                        Text("Connect to a host, or open the demo terminal to see the emulator running locally.")
-                    } actions: {
-                        Button("Open demo terminal") { sessions.openDemo(settings: settings) }
-                            .buttonStyle(.borderedProminent)
+                        Text("Connect from the Hosts tab, or type `ssh user@host` in the Console.")
                     }
                 } else {
                     sessionList
@@ -23,19 +20,11 @@ struct SessionsView: View {
             .navigationTitle("Sessions")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button("Open demo terminal", systemImage: "wrench.and.screwdriver") {
-                            sessions.openDemo(settings: settings)
-                        }
-                        if !sessions.sessions.isEmpty {
-                            Button("Close all", systemImage: "xmark.circle", role: .destructive) {
-                                sessions.closeAll()
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
+                    Button("Close all", systemImage: "xmark.circle", role: .destructive) {
+                        sessions.closeAll()
                     }
-                    .accessibilityLabel("Session actions")
+                    .disabled(sessions.sessions.isEmpty)
+                    .accessibilityLabel("Close all sessions")
                 }
             }
             .hostKeyPrompt()
@@ -103,7 +92,10 @@ private struct HostKeyPromptModifier: ViewModifier {
             // Pinning happens in the SSH layer, which is the only place that
             // holds the full key blob; this alert's whole job is to get a
             // human to look at the fingerprint before that happens.
-            Button("Trust and connect") { request.respond(true) }
+            Button("Trust and connect") {
+                Haptics.shared.fire(.hostKeyTrusted)
+                request.respond(true)
+            }
         } message: { request in
             Text("""
             \(request.hostname):\(request.port) has never been connected to before.

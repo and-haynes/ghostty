@@ -257,10 +257,16 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     // MARK: - Convenience constructors
 
-    static func demo(theme: TerminalTheme = .ghosttyDefault, fontSize: CGFloat = 12) throws -> TerminalSession {
+    /// The local console. Always present, never connected to anything but the
+    /// app's own command interpreter.
+    static func console(
+        commandHost: ConsoleCommandHost?,
+        theme: TerminalTheme = .ghosttyDefault,
+        fontSize: CGFloat = 12
+    ) throws -> TerminalSession {
         try TerminalSession(
-            displayName: "Demo terminal",
-            transport: DemoTransport(),
+            displayName: "Console",
+            transport: ConsoleTransport(commandHost: commandHost),
             theme: theme,
             fontSize: fontSize
         )

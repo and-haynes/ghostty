@@ -5,7 +5,7 @@ import Foundation
 ///
 /// The terminal knows nothing about SSH and the SSH layer knows nothing about
 /// terminals; this is the twenty lines that join them. Keeping the seam means
-/// `DemoTransport` can stand in for a real connection, which is how the
+/// `ConsoleTransport` can stand in for a real connection, which is how the
 /// renderer gets tested without a server.
 @MainActor
 final class SSHTransport: TerminalTransport {
@@ -23,6 +23,7 @@ final class SSHTransport: TerminalTransport {
     private let passwordPrompt: SSHConnectionCoordinator.PasswordPrompt?
     private var cancellables = Set<AnyCancellable>()
     private var connectTask: Task<Void, Never>?
+    private var lastHapticState: SSHConnectionState?
 
     init(
         host: Host,
@@ -93,6 +94,7 @@ final class SSHTransport: TerminalTransport {
     // MARK: - State plumbing
 
     private func apply(_ state: SSHConnectionState) {
+        hapticFor(state)
         statusLabel = "\(host.username)@\(host.destination) · \(state.label)"
         isConnected = state.isConnected
         isError = state.isError
@@ -102,8 +104,34 @@ final class SSHTransport: TerminalTransport {
         onStatusChange?()
     }
 
+    /// One buzz per meaningful transition, and only on a transition — `apply`
+    /// runs for every published state including repeats.
+    private func hapticFor(_ state: SSHConnectionState) {
+        guard state != lastHapticState else { return }
+        lastHapticState = state
+        switch state {
+        case .connected:
+            Haptics.shared.fire(.connected)
+        case .reconnecting:
+            Haptics.shared.fire(.reconnecting)
+        case .disconnected:
+            Haptics.shared.fire(.disconnected)
+        case .failed:
+            Haptics.shared.fire(.authenticationFailed)
+        default:
+            break
+        }
+    }
+
     private func fail(with error: Error) {
         let sshError = error as? SSHError ?? SSHSession.translate(error)
+        // A host key that does not match its pin is not the same class of
+        // problem as a wrong password, and should not feel like one.
+        if case .hostKeyMismatch = sshError {
+            Haptics.shared.fire(.hostKeyMismatch)
+        } else {
+            Haptics.shared.fire(.authenticationFailed)
+        }
         isError = true
         isConnected = false
         statusLabel = sshError.summary

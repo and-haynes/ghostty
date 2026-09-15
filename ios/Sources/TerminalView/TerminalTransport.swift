@@ -3,9 +3,9 @@ import Foundation
 /// The far end of a terminal.
 ///
 /// On a desktop this would be a pty. iOS has no pty and no shell, so the only
-/// real implementation is an SSH channel; `DemoTransport` exists so the
-/// terminal, the renderer and the key bar can be exercised (and screenshotted)
-/// without a network or credentials.
+/// real implementation is an SSH channel; `ConsoleTransport` is the app's own
+/// command line, which also lets the terminal, the renderer and the key bar be
+/// exercised (and screenshotted) without a network or credentials.
 @MainActor
 protocol TerminalTransport: AnyObject {
     /// Bytes arriving from the far end. Called on the main actor, in order.
