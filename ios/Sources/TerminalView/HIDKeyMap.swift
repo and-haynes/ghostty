@@ -110,6 +110,25 @@ enum HIDKeyMap {
         key(forHIDUsage: usage) != nil && usage != .keyboardSpacebar
     }
 
+    /// F1–F12 by number, for the key bar's Fn row.
+    static func functionKey(_ index: Int) -> GhosttyKey? {
+        switch index {
+        case 1: return GHOSTTY_KEY_F1
+        case 2: return GHOSTTY_KEY_F2
+        case 3: return GHOSTTY_KEY_F3
+        case 4: return GHOSTTY_KEY_F4
+        case 5: return GHOSTTY_KEY_F5
+        case 6: return GHOSTTY_KEY_F6
+        case 7: return GHOSTTY_KEY_F7
+        case 8: return GHOSTTY_KEY_F8
+        case 9: return GHOSTTY_KEY_F9
+        case 10: return GHOSTTY_KEY_F10
+        case 11: return GHOSTTY_KEY_F11
+        case 12: return GHOSTTY_KEY_F12
+        default: return nil
+        }
+    }
+
     static func mods(from flags: UIKeyModifierFlags) -> VTMods {
         var mods: VTMods = []
         if flags.contains(.shift) { mods.insert(.shift) }
