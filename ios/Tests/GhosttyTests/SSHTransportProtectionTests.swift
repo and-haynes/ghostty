@@ -180,38 +180,83 @@ final class SSHTransportProtectionTests: XCTestCase {
 
     func testEncryptThenMACIsPreferred() {
         let macs = SSHTransportProtectionCatalog.macNames()
-        XCTAssertEqual(macs.first, "hmac-sha2-256-etm@openssh.com")
+        XCTAssertEqual(macs.first, "hmac-sha2-512-etm@openssh.com")
         XCTAssertTrue(macs.contains("hmac-sha2-256"))
+        XCTAssertLessThan(
+            macs.firstIndex(of: "hmac-sha2-512-etm@openssh.com")!,
+            macs.firstIndex(of: "hmac-sha2-512")!,
+            "encrypt-then-MAC must be preferred over MAC-then-encrypt"
+        )
     }
 
-    /// The default list must contain nothing that needs more key material than
-    /// the *shortest* key exchange swift-nio-ssh will negotiate can produce.
-    /// Offering such a scheme lets a handshake settle on a key that cannot then
-    /// be derived, which is an assertion failure inside the library.
-    func testDefaultSchemesFitTheKeyDerivationCeiling() {
+    func testStrongerMACsAreNowPreferred() {
+        // hmac-sha2-256 used to come first, and not because it was better: a
+        // 64-byte hmac-sha2-512 key could not be derived at all (#008A0). With
+        // the key expansion in place (#008D0), preference order can go back to
+        // meaning what it says.
+        let macs = SSHTransportProtectionCatalog.macNames()
+        XCTAssertLessThan(
+            macs.firstIndex(of: "hmac-sha2-512-etm@openssh.com")!,
+            macs.firstIndex(of: "hmac-sha2-256-etm@openssh.com")!
+        )
+    }
+
+    func testChaCha20IsOfferedAfterTheHardwareAEADs() {
+        let ciphers = SSHTransportProtectionCatalog.cipherNames()
+        XCTAssertTrue(ciphers.contains("chacha20-poly1305@openssh.com"))
+        XCTAssertLessThan(
+            ciphers.firstIndex(of: "aes256-gcm@openssh.com")!,
+            ciphers.firstIndex(of: "chacha20-poly1305@openssh.com")!,
+            "AES-GCM is hardware-accelerated on every device this runs on"
+        )
+        XCTAssertLessThan(
+            ciphers.firstIndex(of: "chacha20-poly1305@openssh.com")!,
+            ciphers.firstIndex(of: "aes256-ctr")!,
+            "an AEAD must be preferred over CTR plus a bolt-on MAC"
+        )
+    }
+
+    /// Every scheme we offer must be keyable under the *shortest* key exchange
+    /// the library will negotiate. That used to rule out anything over 32 bytes
+    /// against a SHA-256 exchange, because the library truncated a single hash;
+    /// it now expands per RFC 4253 §7.2, so the only real bound is that a key be
+    /// a size the scheme itself will accept.
+    func testEverySchemeCanBeKeyedUnderTheShortestExchange() throws {
         let shortestHash = SSHAlgorithmSupport.keyExchange.map(\.hashBytes).min() ?? 0
         XCTAssertEqual(shortestHash, 32)
+
         for scheme in SSHTransportProtectionCatalog.clientSchemes {
-            XCTAssertLessThanOrEqual(
-                scheme.keySizes.encryptionKeySize, 48,
-                "\(scheme.cipherName) asks for more key than a SHA-384 exchange can give"
-            )
-            XCTAssertLessThanOrEqual(
-                scheme.keySizes.macKeySize, 32,
-                "\(scheme.cipherName)/\(scheme.macName ?? "aead") needs a MAC key only nistp521 can produce"
+            let sizes = scheme.keySizes
+            XCTAssertNoThrow(
+                try scheme.init(
+                    initialKeys: NIOSSHSessionKeys(
+                        initialInboundIV: (0..<sizes.ivSize).map { UInt8(truncatingIfNeeded: $0) },
+                        initialOutboundIV: (0..<sizes.ivSize).map { UInt8(truncatingIfNeeded: $0) },
+                        inboundEncryptionKey: SymmetricKey(size: .init(bitCount: sizes.encryptionKeySize * 8)),
+                        outboundEncryptionKey: SymmetricKey(size: .init(bitCount: sizes.encryptionKeySize * 8)),
+                        inboundMACKey: SymmetricKey(size: .init(bitCount: sizes.macKeySize * 8)),
+                        outboundMACKey: SymmetricKey(size: .init(bitCount: sizes.macKeySize * 8))
+                    )
+                ),
+                "\(scheme.cipherName)/\(scheme.macName ?? "aead") rejected its own declared key sizes"
             )
         }
     }
 
-    func testLongKeySchemesAreOnlyOfferedForA64ByteExchange() {
+    func testHMACSHA512SchemesAreOfferedOnEveryConnection() {
+        // They were quarantined in `longKeySchemes` and only offered after a
+        // probe confirmed an ecdh-sha2-nistp521 exchange (#008A0).
+        let macs = SSHTransportProtectionCatalog.macNames()
+        XCTAssertTrue(macs.contains("hmac-sha2-512-etm@openssh.com"))
+        XCTAssertTrue(macs.contains("hmac-sha2-512"))
         XCTAssertEqual(
-            SSHTransportProtectionCatalog.schemes(keyExchangeHashBytes: 48).count,
-            SSHTransportProtectionCatalog.clientSchemes.count
+            SSHTransportProtectionCatalog.schemes(keyExchangeHashBytes: 32).count,
+            SSHTransportProtectionCatalog.clientSchemes.count,
+            "there is no longer a narrower list for a short exchange"
         )
-        let widened = SSHTransportProtectionCatalog.schemes(keyExchangeHashBytes: 64)
-        XCTAssertGreaterThan(widened.count, SSHTransportProtectionCatalog.clientSchemes.count)
-        XCTAssertTrue(
-            SSHTransportProtectionCatalog.macNames(widened).contains("hmac-sha2-512-etm@openssh.com")
+        XCTAssertEqual(
+            SSHTransportProtectionCatalog.schemes(keyExchangeHashBytes: 64).count,
+            SSHTransportProtectionCatalog.clientSchemes.count
         )
     }
 
@@ -301,7 +346,7 @@ final class SSHTransportProtectionTests: XCTestCase {
         with protection: AESCTRTransportProtection<P>,
         sequenceNumber: UInt32
     ) throws -> [UInt8] {
-        try protection.decryptFirstBlock(&buffer)
+        try protection.decryptFirstBlock(&buffer, sequenceNumber: sequenceNumber)
         let packetLength = Int(buffer.getInteger(at: buffer.readerIndex, as: UInt32.self)!)
         var slice = buffer.readSlice(length: packetLength + protection.macBytes + 4)!
         let content = try protection.decryptAndVerifyRemainingPacket(

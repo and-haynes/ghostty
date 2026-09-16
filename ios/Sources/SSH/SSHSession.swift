@@ -451,13 +451,12 @@ final class SSHSession: ObservableObject {
     ///
     /// Two things come out of that:
     ///
-    /// * **A retry that can succeed.** Some ciphers and MACs need a 64-byte
-    ///   session key, which swift-nio-ssh can only derive when the key exchange
-    ///   is `ecdh-sha2-nistp521` (it truncates one hash rather than expanding
-    ///   it). Offering them unconditionally would let a handshake negotiate a
-    ///   key that cannot be derived — but once the probe says this server's
-    ///   exchange *will* be nistp521, offering them is safe and is the only way
-    ///   such a server is reachable at all.
+    /// * **A retry that can succeed**, with a scheme list widened to whatever
+    ///   this server's key exchange can key. Since #008D0 the library expands
+    ///   key material per RFC 4253 §7.2, so every scheme is offerable on every
+    ///   connection and the widened list is the same list — but the machinery
+    ///   stays, because the next scheme that outgrows an exchange will need it
+    ///   and this is where the decision belongs.
     /// * **An error worth reading**, naming the server's algorithms, ours, and
     ///   what is missing.
     private func retryOrExplainNegotiationFailure(

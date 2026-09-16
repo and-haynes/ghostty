@@ -19,32 +19,34 @@ import NIOSSH
 /// array's order *is* the client's stated preference for both. Hence:
 ///
 /// 1. **GCM first.** It is AEAD, it is what NIOSSH has always used, and it is
-///    the best thing on offer. Nothing about this change may make a connection
-///    that worked yesterday negotiate something weaker.
-/// 2. **Then AES-CTR, strongest key first,** paired with encrypt-then-MAC
+///    hardware-accelerated on every device this app runs on. Nothing about this
+///    list may make a connection that worked yesterday negotiate something
+///    weaker.
+/// 2. **Then `chacha20-poly1305@openssh.com`**, the other AEAD, and the only
+///    cipher some hardened servers offer.
+/// 3. **Then AES-CTR, strongest key first,** paired with encrypt-then-MAC
 ///    before MAC-then-encrypt. `-etm` authenticates the ciphertext, so a forged
 ///    packet never reaches the cipher; the plain variants exist because plenty
 ///    of servers offer nothing else.
-/// 3. **`hmac-sha2-256` before `hmac-sha2-512`** — see the key-derivation note
-///    below. This is the one place where the *weaker-sounding* choice is the
-///    correct one.
+/// 4. **`hmac-sha2-512` before `hmac-sha2-256`**, now that both can actually be
+///    keyed.
 ///
-/// ## The 48-byte ceiling
+/// ## The 48-byte ceiling, and its removal (#008D0)
 ///
-/// swift-nio-ssh 0.15 derives session keys by truncating a **single**
-/// key-exchange hash rather than running RFC 4253 §7.2's expansion loop, so it
-/// can never produce more key material than that hash is long: 32 bytes under
-/// `curve25519-sha256` and `ecdh-sha2-nistp256`, 48 under
-/// `ecdh-sha2-nistp384`, 64 only under `ecdh-sha2-nistp521`. Asking for more
-/// trips an `assert` inside the library in debug builds and yields a truncated
-/// key in release ones.
+/// Until the swift-nio-ssh fork, the library derived session keys by truncating
+/// a **single** key-exchange hash rather than running RFC 4253 §7.2's expansion
+/// loop, so it could never produce more key material than that hash was long:
+/// 32 bytes under `curve25519-sha256` and `ecdh-sha2-nistp256`, 48 under
+/// `ecdh-sha2-nistp384`, 64 only under `ecdh-sha2-nistp521`. `hmac-sha2-512`
+/// needs a 64-byte MAC key and `chacha20-poly1305@openssh.com` a 64-byte cipher
+/// key, so neither could be offered unless the exchange was known in advance to
+/// be `ecdh-sha2-nistp521` — which is what `longKeySchemes` and
+/// `schemes(keyExchangeHashBytes:)` were built to arrange.
 ///
-/// NIOSSH's own key-exchange preference begins with `ecdh-sha2-nistp384`, so
-/// against any ordinary server the ceiling is **48 bytes**. `hmac-sha2-512`
-/// needs a 64-byte MAC key and `chacha20-poly1305@openssh.com` needs a 64-byte
-/// cipher key; both are therefore only safe when the exchange is known in
-/// advance to be `ecdh-sha2-nistp521`. `longKeySchemes` exists for exactly that
-/// case and is only used once a probe of the server has confirmed it.
+/// The fork expands, so every scheme here can be offered on every connection
+/// and `longKeySchemes` is now part of `clientSchemes`. The split is kept
+/// because the probe-and-widen path is still the right diagnostic when a
+/// *future* scheme outgrows what a server's key exchange can key.
 /// A `Sendable` wrapper for a list of transport protection *metatypes*.
 ///
 /// `NIOSSHTransportProtection.Type` is not `Sendable` — metatypes of
@@ -61,10 +63,14 @@ struct SSHTransportProtectionSchemes: @unchecked Sendable {
 
 enum SSHTransportProtectionCatalog {
     /// The schemes offered on every connection.
-    ///
-    /// Every entry's key material fits inside 48 bytes, so none of them can ask
-    /// swift-nio-ssh for a key it cannot derive.
-    static let clientSchemes: [NIOSSHTransportProtection.Type] = gcmSchemes + shortKeySchemes
+    static let clientSchemes: [NIOSSHTransportProtection.Type] =
+        gcmSchemes + chaChaSchemes + longKeySchemes + shortKeySchemes
+
+    /// `chacha20-poly1305@openssh.com`. A 64-byte cipher key, derivable since
+    /// the fork taught the library RFC 4253 §7.2's key expansion.
+    static let chaChaSchemes: [NIOSSHTransportProtection.Type] = [
+        ChaCha20Poly1305TransportProtection.self
+    ]
 
     /// The GCM pair swift-nio-ssh ships, kept first so nothing regresses.
     static let gcmSchemes: [NIOSSHTransportProtection.Type] =
@@ -81,8 +87,8 @@ enum SSHTransportProtectionCatalog {
         AESCTRTransportProtection<AES128CTRHMACSHA256>.self,
     ]
 
-    /// AES-CTR with HMAC-SHA2-512. 64-byte MAC keys, so only offered when the
-    /// key exchange is known to hash to 64 bytes.
+    /// AES-CTR with HMAC-SHA2-512. 64-byte MAC keys — offered on every
+    /// connection since #008D0; see the key-expansion note above.
     static let longKeySchemes: [NIOSSHTransportProtection.Type] = [
         AESCTRTransportProtection<AES256CTRHMACSHA512ETM>.self,
         AESCTRTransportProtection<AES192CTRHMACSHA512ETM>.self,
@@ -95,12 +101,13 @@ enum SSHTransportProtectionCatalog {
     /// The schemes to offer a server whose key exchange will hash to
     /// `keyExchangeHashBytes` bytes.
     ///
-    /// Call this only with a value derived from a real probe of the server's
-    /// KEXINIT — guessing high is how a handshake negotiates a cipher whose key
-    /// cannot be derived.
-    static func schemes(keyExchangeHashBytes: Int) -> [NIOSSHTransportProtection.Type] {
-        guard keyExchangeHashBytes >= 64 else { return Self.clientSchemes }
-        return Self.clientSchemes + Self.longKeySchemes
+    /// Every scheme in the catalogue can now be keyed under every key exchange
+    /// the library implements, so this returns the same list either way. It is
+    /// kept, and still called from the negotiation-failure retry path, because
+    /// the moment a scheme needs more key material than some exchange can
+    /// produce, this is the one place that has to know.
+    static func schemes(keyExchangeHashBytes _: Int) -> [NIOSSHTransportProtection.Type] {
+        Self.clientSchemes
     }
 
     // MARK: - What we can say we support

@@ -102,10 +102,11 @@ final class AESCTRTransportProtection<Parameters: AESCTRParameters>: NIOSSHTrans
         self.outboundMACKey = newKeys.outboundMACKey
     }
 
-    /// swift-nio-ssh derives session keys by truncating a *single* key-exchange
-    /// hash rather than running RFC 4253 §7.2's expansion, so it cannot produce
-    /// more key material than the exchange hash is long. Checking here turns
-    /// that into a clean error instead of a MAC failure ten packets later.
+    /// Turn a key of the wrong size into a clean error rather than a MAC failure
+    /// ten packets later. This used to be a real hazard: swift-nio-ssh truncated
+    /// a single key-exchange hash instead of expanding it, so a 64-byte MAC key
+    /// silently came back short. The fork expands (RFC 4253 §7.2), but a check
+    /// this cheap on a path this security-critical stays.
     private static func validate(_ keys: NIOSSHSessionKeys) throws {
         let want = Self.keySizes
         guard keys.inboundEncryptionKey.bitCount == want.encryptionKeySize * 8,
@@ -127,7 +128,7 @@ final class AESCTRTransportProtection<Parameters: AESCTRParameters>: NIOSSHTrans
 
     // MARK: - Inbound
 
-    func decryptFirstBlock(_ source: inout ByteBuffer) throws {
+    func decryptFirstBlock(_ source: inout ByteBuffer, sequenceNumber _: UInt32) throws {
         // Encrypt-then-MAC leaves the length in the clear; there is nothing to do
         // and, critically, nothing may be decrypted before the MAC is checked.
         guard Parameters.encryptThenMAC == false else { return }

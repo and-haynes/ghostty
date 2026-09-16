@@ -16,33 +16,25 @@ import Foundation
 /// * The tag covers `encrypted_length || encrypted_payload` **raw** — no
 ///   `pad16`, no length trailer. That alone rules out reusing `ChaChaPoly`.
 ///
-/// ## Why this is not a `NIOSSHTransportProtection`
+/// ## Where this is used
 ///
-/// It cannot be, with swift-nio-ssh 0.15. Two independent blockers, both in the
-/// library rather than here:
+/// ``ChaCha20Poly1305TransportProtection`` wraps it as a
+/// `NIOSSHTransportProtection`, which is what NIOSSH negotiates and drives.
+/// Keeping the construction separate from the adapter is what lets the tests
+/// here pin it to the RFC 8439 vectors without a handshake in the way.
 ///
-/// 1. **The length nonce is unavailable at the only moment it is needed.**
-///    `NIOSSHTransportProtection.decryptFirstBlock(_:)` must leave the packet
-///    length in plaintext, and it is handed no sequence number — but the
-///    sequence number *is* the nonce the length was encrypted under. Only
-///    `decryptAndVerifyRemainingPacket(_:sequenceNumber:)` receives it, and by
-///    then the parser has already read the length. The protocol has no shape
-///    this cipher fits into.
-/// 2. **The 64-byte key cannot be derived.** swift-nio-ssh 0.15 generates
-///    session keys by truncating a *single* key-exchange hash rather than
-///    running RFC 4253 §7.2's expansion loop, so the most key material it can
-///    produce is the exchange hash's length: 32 bytes for `curve25519-sha256`
-///    and `ecdh-sha2-nistp256`, 48 for `ecdh-sha2-nistp384`, 64 only for
-///    `ecdh-sha2-nistp521`. Asking for more trips an `assert` inside the
-///    library in debug builds.
+/// It took a forked swift-nio-ssh (#008D0) to make that wrapping possible at
+/// all. Two independent blockers, both in the library:
 ///
-/// The construction is implemented and tested here anyway: it is the part that
-/// is genuinely ours to get right, the tests pin it to the RFC vectors, and it
-/// drops straight into place behind a transport protection the day
-/// swift-nio-ssh grows key expansion and a sequence number on
-/// `decryptFirstBlock` (or the day we vendor a patched copy). Until then the
-/// mismatch explainer names this cipher explicitly when it is a server's only
-/// offer, so the failure is a sentence rather than a shrug.
+/// 1. **The length nonce was unavailable at the only moment it was needed.**
+///    `decryptFirstBlock` must leave the packet length in plaintext, and it was
+///    handed no sequence number — but the sequence number *is* the nonce the
+///    length was encrypted under. It now takes one.
+/// 2. **The 64-byte key could not be derived.** The library generated session
+///    keys by truncating a *single* key-exchange hash rather than running
+///    RFC 4253 §7.2's expansion loop, so the most key material it could produce
+///    was the exchange hash's length: 32 bytes for `curve25519-sha256`. The
+///    fork expands.
 enum ChaCha20Poly1305OpenSSH {
     static let keySize = 64
     static let tagSize = Poly1305.tagSize
