@@ -11,6 +11,7 @@ final class AppSettings: ObservableObject {
         static let keyBar = "settings.keyBarEnabled"
         static let iCloudSync = "settings.iCloudSyncDefault"
         static let scrollbackWarning = "settings.confirmUnsafePaste"
+        static let trustedCAs = "settings.trustedCertificateAuthorities"
     }
 
     private let defaults: UserDefaults
@@ -23,6 +24,25 @@ final class AppSettings: ObservableObject {
     /// key between the local and the synced Keychain.
     @Published var iCloudSyncDefault: Bool { didSet { defaults.set(iCloudSyncDefault, forKey: Key.iCloudSync) } }
     @Published var confirmUnsafePaste: Bool { didSet { defaults.set(confirmUnsafePaste, forKey: Key.scrollbackWarning) } }
+
+    /// Public keys of the certificate authorities trusted to vouch for a *host*,
+    /// one per line, as they appear in the CA's `.pub` file. OpenSSH's
+    /// `@cert-authority` lines, without the pattern.
+    ///
+    /// Public keys, so UserDefaults is the right home — but it is the pivot the
+    /// whole host-certificate feature turns on, because a client only offers the
+    /// `*-cert-v01@openssh.com` host key algorithms when this is non-empty. With
+    /// no CA configured, a certified host presents its plain key and
+    /// trust-on-first-use works exactly as it did before.
+    @Published var trustedCertificateAuthorities: String {
+        didSet { defaults.set(trustedCertificateAuthorities, forKey: Key.trustedCAs) }
+    }
+
+    /// The parsed form, with the unparseable lines kept so the UI can point at
+    /// them rather than silently ignoring a typo'd CA.
+    var trustedAuthorities: SSHTrustedAuthorities {
+        SSHTrustedAuthorities(text: self.trustedCertificateAuthorities)
+    }
 
     var theme: TerminalTheme { .named(themeName) }
 
@@ -38,5 +58,6 @@ final class AppSettings: ObservableObject {
         keyBarEnabled = defaults.object(forKey: Key.keyBar) as? Bool ?? true
         iCloudSyncDefault = defaults.object(forKey: Key.iCloudSync) as? Bool ?? false
         confirmUnsafePaste = defaults.object(forKey: Key.scrollbackWarning) as? Bool ?? true
+        trustedCertificateAuthorities = defaults.string(forKey: Key.trustedCAs) ?? ""
     }
 }

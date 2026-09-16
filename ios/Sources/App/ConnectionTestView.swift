@@ -12,6 +12,7 @@ import SwiftUI
 /// Nothing here opens a shell or runs a command on the far end.
 struct ConnectionTestView: View {
     @EnvironmentObject private var vault: Vault
+    @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
 
     let host: Host
@@ -185,7 +186,8 @@ struct ConnectionTestView: View {
             report = await SSHConnectionTester.run(
                 request: plan.request,
                 auth: plan.authMethods,
-                vault: vault
+                vault: vault,
+                trustedHostAuthorities: settings.trustedAuthorities.keys
             )
         } catch let error as SSHError where error == .noAuthenticationMethods {
             // Still worth testing: reachability and the algorithm comparison do
@@ -197,7 +199,8 @@ struct ConnectionTestView: View {
                     username: host.username
                 ),
                 auth: [],
-                vault: vault
+                vault: vault,
+                trustedHostAuthorities: settings.trustedAuthorities.keys
             )
         } catch {
             failure = error.localizedDescription

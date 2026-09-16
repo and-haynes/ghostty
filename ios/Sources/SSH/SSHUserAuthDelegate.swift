@@ -177,6 +177,17 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
                 self.unusableKeyReason = (error as? LocalizedError)?.errorDescription
                 return nil
             }
+        case .certifiedKey(let material, let certificateLine):
+            do {
+                let certificate = try SSHCertificate.parse(certificateLine)
+                return try material.authenticationOffer(username: self.username, certificate: certificate)
+            } catch {
+                // Skipping the certificate is not fatal: the bare key is always
+                // queued behind it, and that is the credential the server is
+                // most likely to accept anyway.
+                self.unusableKeyReason = (error as? LocalizedError)?.errorDescription
+                return nil
+            }
         case .none:
             return NIOSSHUserAuthenticationOffer(
                 username: self.username,
@@ -191,7 +202,7 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
         given available: NIOSSHAvailableUserAuthenticationMethods
     ) -> Bool {
         switch method {
-        case .privateKey:
+        case .privateKey, .certifiedKey:
             return available.contains(.publicKey)
         case .password:
             return available.contains(.password)

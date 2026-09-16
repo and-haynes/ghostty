@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import NIOSSH
 
 /// Adapts an `SSHSession` to the terminal's `TerminalTransport` seam.
 ///
@@ -30,6 +31,7 @@ final class SSHTransport: TerminalTransport {
         vault: Vault,
         defaultTerm: String,
         prompter: any HostKeyPrompter,
+        trustedHostAuthorities: [NIOSSHPublicKey] = [],
         passwordPrompt: SSHConnectionCoordinator.PasswordPrompt? = nil
     ) {
         self.host = host
@@ -38,6 +40,7 @@ final class SSHTransport: TerminalTransport {
         self.passwordPrompt = passwordPrompt
         self.session = SSHSession(vault: vault)
         session.hostKeyPrompter = prompter
+        session.trustedHostAuthorities = trustedHostAuthorities
 
         session.onData = { [weak self] data in self?.onReceive?(data) }
         // stderr from the far end belongs on screen too: a login failure

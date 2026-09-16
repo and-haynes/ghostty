@@ -51,7 +51,9 @@
 		745F19DC0B84200990F6FB63 /* VTKeyEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B8E419CD3D719E3E37C5680 /* VTKeyEncoder.swift */; };
 		76977A751BBF637AB93AA587 /* GhosttyVTTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D221653B3D21AF0E1C7160F3 /* GhosttyVTTests.swift */; };
 		78FE4A02D707624899620D56 /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ABE0D7D8F23A57499D66A80 /* SessionsView.swift */; };
+		7A4A68A1CA964E5744667491 /* SSHCertificate.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECBBF7049EDF44A392C0F761 /* SSHCertificate.swift */; };
 		7B4DAAEB5527E793F5F1C326 /* KeyFormatFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C3064003198DB580301446 /* KeyFormatFixtures.swift */; };
+		80B865A0D23A69EDD0BD0717 /* SSHCertificateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16A6DBA68291B7E858038867 /* SSHCertificateTests.swift */; };
 		870003B218BC68B2A1135EA6 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C825817A9C950F489E8213 /* RootView.swift */; };
 		8B0C9D4A369596AE77A209D1 /* SessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B47D8E1B049604E237AC6E /* SessionManager.swift */; };
 		8B513AFF4CD63A4591E6A074 /* SSHAlgorithmSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8935B86FA5030AA9D9872A6D /* SSHAlgorithmSupport.swift */; };
@@ -133,6 +135,7 @@
 		0A0AC9C8EB3A5C059BBE77FA /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
 		1179FD24C6B4643BFD4F481E /* SSHTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHTypes.swift; sourceTree = "<group>"; };
 		140B49FD67B6B96509DC52E9 /* PEMPrivateKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PEMPrivateKey.swift; sourceTree = "<group>"; };
+		16A6DBA68291B7E858038867 /* SSHCertificateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHCertificateTests.swift; sourceTree = "<group>"; };
 		17551D804A17C5EB6AC039DF /* SyncBundleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBundleTests.swift; sourceTree = "<group>"; };
 		18AF1A9EA00EA8203170A7A9 /* SystemKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemKeychain.swift; sourceTree = "<group>"; };
 		1ABE0D7D8F23A57499D66A80 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
@@ -214,6 +217,7 @@
 		E28D91D0163EC5B7A4A9F234 /* SSHServerOffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHServerOffer.swift; sourceTree = "<group>"; };
 		E729ACAB772481F82AF015B3 /* InMemoryKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InMemoryKeychain.swift; sourceTree = "<group>"; };
 		E73F05362EC2672A5850E126 /* VaultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultTests.swift; sourceTree = "<group>"; };
+		ECBBF7049EDF44A392C0F761 /* SSHCertificate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHCertificate.swift; sourceTree = "<group>"; };
 		ECFA6A5F52D7A682CE3C09BC /* AESCTRTransportProtection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AESCTRTransportProtection.swift; sourceTree = "<group>"; };
 		ED1C35C885CE020F6F2B52B5 /* DER.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DER.swift; sourceTree = "<group>"; };
 		F5D8B79EAEF921EC0343A279 /* VTTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VTTypes.swift; sourceTree = "<group>"; };
@@ -450,6 +454,7 @@
 				844E3E1E3C20D786223C0437 /* HapticsTests.swift */,
 				62C3064003198DB580301446 /* KeyFormatFixtures.swift */,
 				CDC295024BBEF3DC82004E17 /* KeyFormatTests.swift */,
+				16A6DBA68291B7E858038867 /* SSHCertificateTests.swift */,
 				DBE312E78573CE2AD557CB7D /* SSHDiagnosticsTests.swift */,
 				8BA5BBF52571944CF2DFD98D /* SSHKEXInitFixtures.swift */,
 				8D2FE4BB8666107B82DC0ABB /* SSHLocalServerIntegrationTests.swift */,
@@ -500,6 +505,7 @@
 			isa = PBXGroup;
 			children = (
 				3C7B3832872F3C4061BB75FD /* HostKeyVerification.swift */,
+				ECBBF7049EDF44A392C0F761 /* SSHCertificate.swift */,
 				47769CF738B47F3AA521A5F2 /* SSHConnectionCoordinator.swift */,
 				3DEC2174AD5F5D754734A039 /* SSHPrivateKeyMaterial+NIOSSH.swift */,
 				C680D3B5EFF926E44658C176 /* SSHSession.swift */,
@@ -680,6 +686,7 @@
 				870003B218BC68B2A1135EA6 /* RootView.swift in Sources */,
 				CDE6C78F4A7267C9FD53E4A5 /* SSHAlgorithmMismatch.swift in Sources */,
 				8B513AFF4CD63A4591E6A074 /* SSHAlgorithmSupport.swift in Sources */,
+				7A4A68A1CA964E5744667491 /* SSHCertificate.swift in Sources */,
 				49EC1C95E04BE764AD74532D /* SSHConnectionCoordinator.swift in Sources */,
 				02C998DBA24B5D1DBADF6142 /* SSHConnectionTester.swift in Sources */,
 				09206FBCDCFB709AE05C9CF0 /* SSHMACAlgorithm.swift in Sources */,
@@ -737,6 +744,7 @@
 				00135E13676B45245A21384B /* HapticsTests.swift in Sources */,
 				7B4DAAEB5527E793F5F1C326 /* KeyFormatFixtures.swift in Sources */,
 				A34214C72DC6A24E9460959D /* KeyFormatTests.swift in Sources */,
+				80B865A0D23A69EDD0BD0717 /* SSHCertificateTests.swift in Sources */,
 				EFEDBA5E9CAD4FDF098036EC /* SSHDiagnosticsTests.swift in Sources */,
 				C65095CD8B3174B0A6D21BDD /* SSHKEXInitFixtures.swift in Sources */,
 				DE332A33EF64E424214F4481 /* SSHLocalServerIntegrationTests.swift in Sources */,

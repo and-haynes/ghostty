@@ -78,6 +78,7 @@ final class SessionManager: ObservableObject {
             vault: vault,
             defaultTerm: settings.defaultTerm,
             prompter: self,
+            trustedHostAuthorities: settings.trustedAuthorities.keys,
             passwordPrompt: { [weak self] host in
                 await self?.askPassword(for: host) ?? nil
             }

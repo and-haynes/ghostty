@@ -147,7 +147,8 @@ enum SSHConnectionTester {
     static func run(
         request: SSHConnectionRequest,
         auth: [SSHAuthMethod],
-        vault: Vault
+        vault: Vault,
+        trustedHostAuthorities: [NIOSSHPublicKey] = []
     ) async -> SSHConnectionReport {
         var report = SSHConnectionReport(
             destination: request.destinationDescription,
@@ -188,7 +189,8 @@ enum SSHConnectionTester {
         let hostKeyDelegate = TOFUHostKeyDelegate(
             hostname: request.hostname,
             port: request.port,
-            failureRecorder: recorder
+            failureRecorder: recorder,
+            trustedAuthorities: trustedHostAuthorities
         ) { keyType, fingerprint, _ in
             observer.record(type: keyType, fingerprint: fingerprint)
             guard let pin else {
@@ -216,7 +218,8 @@ enum SSHConnectionTester {
                 request: request,
                 hostKeyDelegate: hostKeyDelegate,
                 authDelegate: authDelegate,
-                recorder: recorder
+                recorder: recorder,
+                trustsCertificateAuthorities: !trustedHostAuthorities.isEmpty
             )
             report.hostKeyType = observer.keyType
             report.hostKeyFingerprint = observer.fingerprint
@@ -270,26 +273,32 @@ enum SSHConnectionTester {
         request: SSHConnectionRequest,
         hostKeyDelegate: TOFUHostKeyDelegate,
         authDelegate: SSHUserAuthDelegate,
-        recorder: SSHFailureRecorder
+        recorder: SSHFailureRecorder,
+        trustsCertificateAuthorities: Bool
     ) async throws {
         let protection = SSHTransportProtectionSchemes(
             SSHTransportProtectionCatalog.clientSchemes
         )
+        // Must match what a real connection would offer, or the sheet would
+        // diagnose a negotiation the app will never actually attempt.
+        let hostKeyAlgorithms = SSHAlgorithmSupport.offeredHostKeyAlgorithms(
+            trustingCertificateAuthorities: trustsCertificateAuthorities
+        ).map { Substring($0) }
         let bootstrap = ClientBootstrap(group: SSHEventLoopGroupProvider.shared)
             .connectTimeout(.seconds(15))
             .channelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
                     let sync = channel.pipeline.syncOperations
+                    var configuration = SSHClientConfiguration(
+                        userAuthDelegate: authDelegate,
+                        serverAuthDelegate: hostKeyDelegate,
+                        globalRequestDelegate: nil,
+                        transportProtectionSchemes: protection.schemes
+                    )
+                    configuration.serverHostKeyAlgorithms = hostKeyAlgorithms
                     try sync.addHandler(
                         NIOSSHHandler(
-                            role: .client(
-                                SSHClientConfiguration(
-                                    userAuthDelegate: authDelegate,
-                                    serverAuthDelegate: hostKeyDelegate,
-                                    globalRequestDelegate: nil,
-                                    transportProtectionSchemes: protection.schemes
-                                )
-                            ),
+                            role: .client(configuration),
                             allocator: channel.allocator,
                             inboundChildChannelInitializer: nil
                         )

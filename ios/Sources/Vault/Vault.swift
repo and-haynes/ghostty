@@ -185,6 +185,26 @@ final class Vault: ObservableObject {
         return identities.first { $0.id == id }
     }
 
+    /// Attaches a CA certificate to an identity, or removes it when `line` is
+    /// nil.
+    ///
+    /// The line is stored verbatim and *not* parsed here: a certificate is SSH
+    /// wire format, and parsing it belongs in the SSH layer, which already has a
+    /// tested implementation of it. The caller is expected to have parsed it and
+    /// checked it against this key's fingerprint first — a certificate stored
+    /// against the wrong key otherwise becomes an authentication failure at the
+    /// far end of a network round trip, with the server's log as the only clue.
+    @discardableResult
+    func setCertificate(_ line: String?, for identity: Identity) throws -> Identity {
+        guard let index = identities.firstIndex(where: { $0.id == identity.id }) else {
+            throw VaultError.identityNotFound
+        }
+        let trimmed = line?.trimmingCharacters(in: .whitespacesAndNewlines)
+        identities[index].certificate = (trimmed?.isEmpty == false) ? trimmed : nil
+        try persistIdentities()
+        return identities[index]
+    }
+
     // MARK: - Hosts
 
     func upsert(_ host: Host) {

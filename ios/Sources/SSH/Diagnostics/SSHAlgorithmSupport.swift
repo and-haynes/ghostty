@@ -33,13 +33,20 @@ enum SSHAlgorithmSupport {
     /// §3 reuses the `ssh-rsa` key blob for both. `ssh-rsa` itself is absent
     /// because it signs with SHA-1; the fork will verify one if a server insists
     /// on sending it, but this client never asks.
-    static let hostKeyAlgorithms: [String] = [
+    static let hostKeyAlgorithms: [String] = certificateHostKeyAlgorithms + plainHostKeyAlgorithms
+
+    /// CA-signed host certificates, offered only when a certificate authority is
+    /// configured — see ``offeredHostKeyAlgorithms(trustingCertificateAuthorities:)``.
+    static let certificateHostKeyAlgorithms: [String] = [
         "ssh-ed25519-cert-v01@openssh.com",
         "ecdsa-sha2-nistp384-cert-v01@openssh.com",
         "ecdsa-sha2-nistp256-cert-v01@openssh.com",
         "ecdsa-sha2-nistp521-cert-v01@openssh.com",
         "rsa-sha2-512-cert-v01@openssh.com",
         "rsa-sha2-256-cert-v01@openssh.com",
+    ]
+
+    static let plainHostKeyAlgorithms: [String] = [
         "ssh-ed25519",
         "ecdsa-sha2-nistp384",
         "ecdsa-sha2-nistp256",
@@ -47,6 +54,22 @@ enum SSHAlgorithmSupport {
         "rsa-sha2-512",
         "rsa-sha2-256",
     ]
+
+    /// What this client actually names in KEXINIT.
+    ///
+    /// Asking for a host certificate we have no CA for would be worse than not
+    /// asking: the server would present one, we would have nothing to check it
+    /// against, and a connection that worked yesterday under trust-on-first-use
+    /// would start failing. So the certificate algorithms are offered only when
+    /// there is a CA to judge them with, and certificates come first when they
+    /// are — that is how OpenSSH orders them, and it is what lets a certified
+    /// host present its certificate while an uncertified one falls back to its
+    /// plain key in the same negotiation.
+    static func offeredHostKeyAlgorithms(trustingCertificateAuthorities: Bool) -> [String] {
+        trustingCertificateAuthorities
+            ? Self.certificateHostKeyAlgorithms + Self.plainHostKeyAlgorithms
+            : Self.plainHostKeyAlgorithms
+    }
 
     static var ciphers: [String] { SSHTransportProtectionCatalog.cipherNames() }
     static var macs: [String] { SSHTransportProtectionCatalog.macNames() }

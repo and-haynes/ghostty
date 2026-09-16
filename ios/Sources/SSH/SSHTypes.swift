@@ -84,6 +84,14 @@ enum SSHConnectionState: Equatable, Sendable {
 enum SSHAuthMethod: @unchecked Sendable {
     case password(String)
     case privateKey(SSHPrivateKeyMaterial)
+    /// A key together with a CA certificate over it. The certificate is what
+    /// goes on the wire; the key still does the signing.
+    ///
+    /// Always offered *before* the bare key, never instead of it: a host that
+    /// does not trust the CA, or whose sshd predates `TrustedUserCAKeys`, will
+    /// reject the certificate and then accept the same key from
+    /// `authorized_keys`.
+    case certifiedKey(SSHPrivateKeyMaterial, certificate: String)
     /// The "none" method — some servers (and some jump-box setups) accept it,
     /// and it is also the polite way to ask a server which methods it wants.
     case none
@@ -91,8 +99,10 @@ enum SSHAuthMethod: @unchecked Sendable {
     /// Which NIOSSH auth method this offer satisfies, so the delegate can skip
     /// offers the server has already said it will not accept.
     var requiresPublicKeyMethod: Bool {
-        if case .privateKey = self { return true }
-        return false
+        switch self {
+        case .privateKey, .certifiedKey: return true
+        case .password, .none: return false
+        }
     }
 
     var requiresPasswordMethod: Bool {
@@ -106,6 +116,8 @@ enum SSHAuthMethod: @unchecked Sendable {
         switch self {
         case .password: return "password"
         case .privateKey(let material): return "public key (\(material.keyType.displayName))"
+        case .certifiedKey(let material, _):
+            return "certificate over a \(material.keyType.displayName) key"
         case .none: return "none"
         }
     }

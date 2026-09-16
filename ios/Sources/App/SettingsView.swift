@@ -77,6 +77,20 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        TrustedAuthoritiesView()
+                    } label: {
+                        LabeledContent("SSH certificates") {
+                            Text(authoritySummary).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Certificates")
+                } footer: {
+                    Text("A certificate authority you name here can vouch for a host, the way an @cert-authority line does in known_hosts — no first-use prompt, no pinned key to re-approve when the host is rebuilt. Ghostty only asks servers for a certificate once there is a CA to check one against.")
+                }
+
+                Section {
                     NavigationLink("Known hosts (\(vault.knownHosts.count))") { KnownHostsView() }
                 } header: {
                     Text("Diagnostics")
@@ -92,6 +106,96 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
         }
+    }
+
+    private var authoritySummary: String {
+        let authorities = settings.trustedAuthorities
+        let valid = authorities.keys.count
+        let unreadable = authorities.entries.count - valid
+        if valid == 0 {
+            return unreadable > 0 ? "None readable" : "None"
+        }
+        let base = valid == 1 ? "1 CA" : "\(valid) CAs"
+        return unreadable > 0 ? "\(base), \(unreadable) unreadable" : base
+    }
+}
+
+/// The trusted certificate authority list.
+///
+/// One public key per line, as it appears in the CA's `.pub` file — the same
+/// text you would put after `@cert-authority *` in `known_hosts`. Lines are
+/// parsed as they are typed and shown back with a fingerprint, because a CA
+/// entered with a missing character would otherwise fail silently, at connect
+/// time, as "no host key algorithm in common".
+struct TrustedAuthoritiesView: View {
+    @EnvironmentObject private var settings: AppSettings
+
+    var body: some View {
+        Form {
+            Section {
+                TextEditor(text: $settings.trustedCertificateAuthorities)
+                    .font(.system(.footnote, design: .monospaced))
+                    .frame(minHeight: 140)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            } header: {
+                Text("Host certificate authorities")
+            } footer: {
+                Text("One public key per line: ssh-ed25519 AAAA… ca@example.com. Blank lines and # comments are ignored.")
+            }
+
+            let authorities = settings.trustedAuthorities
+            if !authorities.entries.isEmpty {
+                Section("Recognised") {
+                    ForEach(authorities.entries) { entry in
+                        AuthorityRow(entry: entry)
+                    }
+                }
+            }
+
+            Section {
+                Text("""
+                    A host certificate is checked against these keys instead of being pinned on \
+                    first use: the certificate has to be signed by one of them, name this host \
+                    among its principals, be a host certificate rather than a user one, and still \
+                    be inside its validity window.
+
+                    Certificates are never pinned. A certificate's fingerprint changes every time \
+                    the CA re-signs the same host key, which is the routine event that a short \
+                    validity window exists to cause.
+                    """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("SSH certificates")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct AuthorityRow: View {
+    let entry: SSHTrustedAuthorities.Entry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: entry.isValid ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(entry.isValid ? .green : .orange)
+                Text(entry.comment ?? entry.text.split(separator: " ").first.map(String.init) ?? "CA")
+                    .font(.callout)
+            }
+            if let fingerprint = entry.fingerprint {
+                Text(fingerprint)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            } else {
+                Text("Not a public key line. Paste the contents of the CA's .pub file.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 

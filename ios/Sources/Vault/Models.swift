@@ -99,8 +99,21 @@ struct Identity: Identifiable, Codable, Hashable, Sendable {
     /// True when the Keychain item is marked `kSecAttrSynchronizable`.
     /// Never true for Secure Enclave keys — they cannot leave the device.
     var syncsToICloud: Bool
+    /// An OpenSSH certificate over this key, as a
+    /// `"<type> <base64> [comment]"` line, or nil if the key has never been
+    /// signed by a CA.
+    ///
+    /// Public data — a certificate is handed to every server it is offered to —
+    /// so it lives here with the rest of the metadata rather than in the
+    /// Keychain. Optional so that a record written before certificates existed
+    /// still decodes.
+    var certificate: String?
 
     var keychainAccount: String { "identity.\(id.uuidString)" }
+
+    /// True when a CA has signed this key, so the app will offer the
+    /// certificate before falling back to the bare key.
+    var hasCertificate: Bool { self.certificate?.isEmpty == false }
 
     init(
         id: UUID = UUID(),
@@ -111,7 +124,8 @@ struct Identity: Identifiable, Codable, Hashable, Sendable {
         createdAt: Date = Date(),
         isSecureEnclave: Bool = false,
         requiresBiometrics: Bool = false,
-        syncsToICloud: Bool = false
+        syncsToICloud: Bool = false,
+        certificate: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -122,6 +136,7 @@ struct Identity: Identifiable, Codable, Hashable, Sendable {
         self.isSecureEnclave = isSecureEnclave
         self.requiresBiometrics = requiresBiometrics
         self.syncsToICloud = syncsToICloud
+        self.certificate = certificate
     }
 }
 

@@ -142,14 +142,31 @@ struct SSHAlgorithmMismatch: Equatable {
         if failures.contains(.hostKey) {
             // Ghostty verifies Ed25519, the three NIST curves, RSA (SHA-2 only)
             // and an OpenSSH certificate over any of them, so reaching this
-            // branch means the server offers something genuinely outside that
-            // set — `ssh-dss`, or `ssh-rsa` with no SHA-2 variant alongside it.
+            // branch means either that no certificate authority is configured
+            // for a host that presents nothing but certificates, or that the
+            // server offers something genuinely outside that set — `ssh-dss`, or
+            // `ssh-rsa` with no SHA-2 variant alongside it.
+            let certificateOnly = !offer.hostKeyAlgorithms.isEmpty
+                && offer.hostKeyAlgorithms.allSatisfy { Self.isCertificate($0) }
             let sha1RSAOnly = !offer.hostKeyAlgorithms.isEmpty
                 && offer.hostKeyAlgorithms.allSatisfy { $0 == "ssh-rsa" }
             let dssOnly = !offer.hostKeyAlgorithms.isEmpty
                 && offer.hostKeyAlgorithms.allSatisfy { $0 == "ssh-dss" }
 
-            if sha1RSAOnly {
+            if certificateOnly {
+                notes.append(
+                    """
+                    \(hostname) only presents CA-signed host certificates, and Ghostty has no \
+                    certificate authority to check one against — so it does not ask for one, \
+                    and the two of you have no host key algorithm in common.
+
+                    Add the CA's public key (the contents of its .pub file) under \
+                    Settings › SSH certificates. Alternatively, on the server: keep a plain \
+                    Ed25519 host key alongside the certificate — OpenSSH offers both by \
+                    default, so something has removed the plain HostKey line here.
+                    """
+                )
+            } else if sha1RSAOnly {
                 notes.append(
                     """
                     \(hostname) offers its RSA host key under ssh-rsa only, which signs \

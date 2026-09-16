@@ -375,6 +375,15 @@ final class SSHSession: ObservableObject {
     /// than trust silently.
     weak var hostKeyPrompter: (any HostKeyPrompter)?
 
+    /// Certificate authorities trusted to vouch for a host, from Settings.
+    ///
+    /// Two things turn on this being non-empty: the client offers the
+    /// `*-cert-v01@openssh.com` host key algorithms, so a certified host gets
+    /// the chance to present its certificate; and ``TOFUHostKeyDelegate`` has
+    /// something to check one against. Empty — the default — leaves host
+    /// verification exactly as it was: plain keys, trust on first use.
+    var trustedHostAuthorities: [NIOSSHPublicKey] = []
+
     /// Held strongly and for the session's whole life.
     ///
     /// The vault is an app-lifetime object, and the session must be able to
@@ -528,10 +537,16 @@ final class SSHSession: ObservableObject {
             self.state = .resolving
         }
 
+        let authorities = self.trustedHostAuthorities
+        let hostKeyAlgorithms = SSHAlgorithmSupport.offeredHostKeyAlgorithms(
+            trustingCertificateAuthorities: !authorities.isEmpty
+        ).map { Substring($0) }
+
         let hostKeyDelegate = TOFUHostKeyDelegate(
             hostname: request.hostname,
             port: request.port,
-            failureRecorder: recorder
+            failureRecorder: recorder,
+            trustedAuthorities: authorities
         ) { [weak self] keyType, fingerprint, publicKeyLine in
             guard let self else {
                 return .failure(.notConnected)
@@ -574,20 +589,22 @@ final class SSHSession: ObservableObject {
             .channelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
                     let sync = channel.pipeline.syncOperations
+                    var configuration = SSHClientConfiguration(
+                        userAuthDelegate: authDelegate,
+                        serverAuthDelegate: hostKeyDelegate,
+                        globalRequestDelegate: nil,
+                        // swift-nio-ssh offers the two OpenSSH AES-GCM modes and
+                        // nothing else, which leaves every router, NAS and
+                        // Dropbear box unreachable. See
+                        // `SSHTransportProtectionCatalog` for what this adds and
+                        // the order it adds it in.
+                        transportProtectionSchemes: protection.schemes
+                    )
+                    // Certificate algorithms only when there is a CA to judge
+                    // them with; see `trustedHostAuthorities`.
+                    configuration.serverHostKeyAlgorithms = hostKeyAlgorithms
                     let ssh = NIOSSHHandler(
-                        role: .client(
-                            SSHClientConfiguration(
-                                userAuthDelegate: authDelegate,
-                                serverAuthDelegate: hostKeyDelegate,
-                                globalRequestDelegate: nil,
-                                // swift-nio-ssh offers the two OpenSSH AES-GCM
-                                // modes and nothing else, which leaves every
-                                // router, NAS and Dropbear box unreachable.
-                                // See `SSHTransportProtectionCatalog` for what
-                                // this adds and the order it adds it in.
-                                transportProtectionSchemes: protection.schemes
-                            )
-                        ),
+                        role: .client(configuration),
                         allocator: channel.allocator,
                         // We never accept channels opened by the server.
                         inboundChildChannelInitializer: nil

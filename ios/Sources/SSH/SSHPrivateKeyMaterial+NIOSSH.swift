@@ -53,4 +53,25 @@ extension SSHPrivateKeyMaterial {
             offer: .privateKey(.init(privateKey: try self.nioSSHPrivateKey()))
         )
     }
+
+    /// The same, offering a CA certificate over this key rather than the bare
+    /// key.
+    ///
+    /// What changes on the wire is the public half: the server is sent the
+    /// certificate — nonce, principals, validity, the CA's signature and all —
+    /// instead of `ssh-ed25519 AAAA…`, and decides whether to trust it by
+    /// checking the CA rather than by looking the key up in `authorized_keys`.
+    /// The private key still produces the user auth signature, unchanged.
+    func authenticationOffer(
+        username: String,
+        certificate: SSHCertificate
+    ) throws -> NIOSSHUserAuthenticationOffer {
+        NIOSSHUserAuthenticationOffer(
+            username: username,
+            serviceName: "",
+            offer: .privateKey(
+                .init(privateKey: try self.nioSSHPrivateKey(), certifiedKey: certificate.certifiedKey)
+            )
+        )
+    }
 }

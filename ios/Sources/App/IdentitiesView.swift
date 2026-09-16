@@ -518,6 +518,7 @@ struct ExportIdentityView: View {
                 } footer: {
                     Text("Append this line to ~/.ssh/authorized_keys on the remote host.")
                 }
+                CertificateSection(identity: identity)
                 Section {
                     ShareLink(item: identity.publicKeyLine) {
                         Label("Share public key", systemImage: "square.and.arrow.up")
@@ -533,6 +534,239 @@ struct ExportIdentityView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
+        }
+    }
+}
+
+// MARK: - Certificates
+
+/// The CA certificate attached to a key, if any, and the controls to attach or
+/// remove one.
+///
+/// A certificate is the other way a server can be persuaded to let a key in:
+/// instead of the key appearing in `authorized_keys`, a CA the server trusts has
+/// signed a statement about it. Enrolling a new phone becomes one `ssh-keygen
+/// -s`, rather than an edit on every host.
+///
+/// It is offered automatically whenever it is present, ahead of the bare key,
+/// and the bare key is always still offered behind it — so attaching one cannot
+/// break a host that has the key in `authorized_keys` and knows nothing about
+/// the CA.
+private struct CertificateSection: View {
+    @EnvironmentObject private var vault: Vault
+    let identity: Identity
+
+    @State private var importing = false
+    @State private var confirmingRemoval = false
+    @State private var errorMessage: String?
+
+    private var certificate: SSHCertificate? {
+        guard let line = identity.certificate else { return nil }
+        return try? SSHCertificate.parse(line)
+    }
+
+    var body: some View {
+        Section {
+            if let certificate {
+                CertificateDetails(certificate: certificate)
+                Button("Replace certificate", systemImage: "arrow.triangle.2.circlepath") {
+                    importing = true
+                }
+                Button("Remove certificate", systemImage: "trash", role: .destructive) {
+                    confirmingRemoval = true
+                }
+            } else if identity.certificate != nil {
+                // Stored but no longer parseable: say so rather than silently
+                // showing "no certificate" next to a key that has one.
+                Label(
+                    "The stored certificate could not be read. Import it again.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.callout)
+                Button("Import certificate", systemImage: "seal") { importing = true }
+                Button("Remove certificate", systemImage: "trash", role: .destructive) {
+                    confirmingRemoval = true
+                }
+            } else {
+                Button("Import certificate", systemImage: "seal") { importing = true }
+            }
+        } header: {
+            Text("Certificate")
+        } footer: {
+            Text(certificate == nil
+                 ? "Paste the output of ssh-keygen -s ca -I <id> -n <principals> key.pub — the <key>-cert.pub file. Used automatically when present, with the plain key still offered behind it."
+                 : "Offered before the plain key on every connection. A host that does not trust this CA falls back to the key itself.")
+        }
+        .sheet(isPresented: $importing) {
+            ImportCertificateView(identity: identity)
+        }
+        .confirmationDialog(
+            "Remove this certificate?",
+            isPresented: $confirmingRemoval,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) { remove() }
+        } message: {
+            Text("The key itself is untouched. Hosts that admit it through authorized_keys keep working; hosts that only trust the CA will stop.")
+        }
+        .alert("Couldn't remove the certificate", isPresented: .init(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        ), presenting: errorMessage) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { Text($0) }
+    }
+
+    private func remove() {
+        do {
+            try vault.setCertificate(nil, for: identity)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct CertificateDetails: View {
+    let certificate: SSHCertificate
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: certificate.isCurrentlyValid ? "seal.fill" : "seal")
+                    .foregroundStyle(certificate.isCurrentlyValid ? .green : .orange)
+                Text(certificate.keyID.isEmpty ? "(no key ID)" : certificate.keyID)
+                    .font(.callout.weight(.medium))
+            }
+            LabeledContent("Serial", value: String(certificate.serial))
+            LabeledContent(
+                "Principals",
+                value: certificate.principals.isEmpty
+                    ? "any user" : certificate.principals.joined(separator: ", ")
+            )
+            LabeledContent("Validity", value: certificate.validityDescription)
+            if !certificate.extensions.isEmpty {
+                LabeledContent("Extensions", value: certificate.extensions.joined(separator: ", "))
+            }
+            if !certificate.criticalOptions.isEmpty {
+                LabeledContent(
+                    "Critical options",
+                    value: certificate.criticalOptions.keys.sorted().joined(separator: ", ")
+                )
+            }
+            if let authority = certificate.authorityFingerprint {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Signed by").font(.caption).foregroundStyle(.secondary)
+                    Text(authority)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+            if certificate.kind != .user {
+                Label(
+                    "This is a \(certificate.kind.rawValue) certificate. Only a user certificate authenticates you to a server.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+        }
+        .font(.callout)
+        .padding(.vertical, 2)
+    }
+}
+
+/// Paste-a-certificate sheet.
+struct ImportCertificateView: View {
+    @EnvironmentObject private var vault: Vault
+    @Environment(\.dismiss) private var dismiss
+
+    let identity: Identity
+    @State private var text = ""
+    @State private var errorMessage: String?
+
+    private var parsed: Result<SSHCertificate, Error>? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return Result { try SSHCertificate.parse(trimmed) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextEditor(text: $text)
+                        .font(.system(.footnote, design: .monospaced))
+                        .frame(minHeight: 120)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    Button("Paste", systemImage: "doc.on.clipboard") {
+                        text = UIPasteboard.general.string ?? ""
+                    }
+                } header: {
+                    Text("Certificate")
+                } footer: {
+                    Text(footer)
+                }
+
+                if case .success(let certificate) = parsed {
+                    Section("This certificate") {
+                        CertificateDetails(certificate: certificate)
+                    }
+                }
+            }
+            .navigationTitle("Import certificate")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Import") { save() }.disabled(!canImport)
+                }
+            }
+            .alert("Couldn't import the certificate", isPresented: .init(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            ), presenting: errorMessage) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { Text($0) }
+        }
+    }
+
+    private var canImport: Bool {
+        guard case .success(let certificate) = parsed else { return false }
+        return certificate.certifies(publicKeyLine: identity.publicKeyLine)
+    }
+
+    private var footer: String {
+        switch parsed {
+        case nil:
+            return "The contents of <key>-cert.pub, as written by ssh-keygen -s."
+        case .failure(let error):
+            return error.localizedDescription
+        case .success(let certificate):
+            guard certificate.certifies(publicKeyLine: identity.publicKeyLine) else {
+                return SSHCertificateError.wrongKey(
+                    certificateFingerprint: certificate.certifiedKeyFingerprint ?? "an unknown key",
+                    keyFingerprint: identity.fingerprint
+                ).localizedDescription
+            }
+            if certificate.kind == .host {
+                return "This is a host certificate. It will be stored, but only a user certificate authenticates you to a server — a host CA belongs in Settings › SSH certificates."
+            }
+            if !certificate.isCurrentlyValid {
+                return "\(certificate.validityDescription). It will be stored, but servers will refuse it until it is re-signed."
+            }
+            return "Certifies this key. It will be offered before the plain key on every connection."
+        }
+    }
+
+    private func save() {
+        guard case .success(let certificate) = parsed else { return }
+        do {
+            try vault.setCertificate(certificate.line, for: identity)
+            Haptics.shared.fire(.keyGenerated)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

@@ -24,7 +24,10 @@ enum SSHConnectionCoordinator {
     /// Ordering, and why:
     /// 1. **The host's identity key**, if it has one. Public key auth is the
     ///    thing we want to succeed; it is also the only method that works with
-    ///    a Secure Enclave key.
+    ///    a Secure Enclave key. When the key carries a CA certificate, the
+    ///    certificate is offered first and the bare key immediately after — a
+    ///    host enrolled with the CA takes the certificate, one that is not takes
+    ///    the key from its `authorized_keys`, and neither needs configuring.
     /// 2. **A stored password**, if the host is marked `usesPassword` and the
     ///    vault has one.
     /// 3. **An interactive prompt** — but only when the first two produced
@@ -75,6 +78,9 @@ enum SSHConnectionCoordinator {
                     for: identity,
                     prompt: "Unlock \"\(identity.name)\" to connect to \(host.displayName)"
                 )
+                if let certificate = identity.certificate, !certificate.isEmpty {
+                    methods.append(.certifiedKey(material, certificate: certificate))
+                }
                 methods.append(.privateKey(material))
             } catch {
                 // Face ID cancelled, item missing, key revoked… Don't give up
