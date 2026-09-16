@@ -1,6 +1,7 @@
 import Crypto
 import UIKit
 import Foundation
+import NIOSSH
 import XCTest
 
 @testable import Ghostty
@@ -407,13 +408,39 @@ final class ClipboardKeyImportTests: XCTestCase {
         XCTAssertEqual(vault.identities.count, cases.count)
     }
 
-    func testAnRSAIdentityIsMarkedAsUnusableForAuthentication() throws {
+    /// An imported RSA key can now open a connection (#008D0), which it could
+    /// not before the swift-nio-ssh fork. The seam is
+    /// `SSHPrivateKeyMaterial.nioSSHPrivateKey()`, so that is what is asserted:
+    /// a fingerprint and an exported line were never the missing part.
+    func testAnRSAIdentityCanAuthenticate() throws {
         let vault = makeVault()
         let identity = try vault.importIdentity(name: "rsa", pem: KeyFormatFixtures.rsaPKCS8)
-        XCTAssertFalse(identity.keyType.canAuthenticate)
+        XCTAssertTrue(identity.keyType.canAuthenticate)
+
+        let material = try vault.privateKey(for: identity)
+        let nioKey = try material.nioSSHPrivateKey()
+
+        // The public half NIOSSH derives has to be the same key the vault
+        // exported, or the server would be handed a line that does not match
+        // the signature it then has to verify.
+        XCTAssertEqual(
+            String(openSSHPublicKey: nioKey.publicKey),
+            identity.publicKeyLine.split(separator: " ").prefix(2).joined(separator: " ")
+        )
+
+        // And the offer really carries that key, rather than falling through to
+        // "no credential" the way it used to.
+        let offer = try material.authenticationOffer(username: "andy")
+        guard case .privateKey(let privateKeyOffer) = offer.offer else {
+            return XCTFail("an RSA key should produce a private key offer")
+        }
+        XCTAssertEqual(privateKeyOffer.publicKey, nioKey.publicKey)
+    }
+
+    func testRSAIsStillNotOfferedAsAKeyToGenerate() throws {
         XCTAssertFalse(
             SSHKeyType.generatable.contains(.rsa),
-            "generating a key the app cannot use would be a trap"
+            "RSA works, but nobody should be nudged into generating a new one in 2026"
         )
     }
 }

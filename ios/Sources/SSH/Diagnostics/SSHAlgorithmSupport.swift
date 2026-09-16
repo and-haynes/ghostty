@@ -22,14 +22,30 @@ enum SSHAlgorithmSupport {
 
     static var keyExchangeAlgorithms: [String] { Self.keyExchange.map(\.name) }
 
-    /// Host key algorithms swift-nio-ssh can verify. RSA is absent because the
-    /// library's `NIOSSHPublicKey` has a closed set of backing key types and no
-    /// way to register another — see `RSAPublicKey` for the detail.
+    /// Host key algorithms this client offers, in preference order.
+    ///
+    /// This mirrors `SSHKeyExchangeStateMachine.supportedServerHostKeyAlgorithms`
+    /// in the fork, which is what actually goes into KEXINIT. Certificates come
+    /// first, as they do in OpenSSH, so a host that has one presents it; the
+    /// plain algorithms follow for every host that does not.
+    ///
+    /// The RSA entries are signature algorithm names, not key formats: RFC 8332
+    /// §3 reuses the `ssh-rsa` key blob for both. `ssh-rsa` itself is absent
+    /// because it signs with SHA-1; the fork will verify one if a server insists
+    /// on sending it, but this client never asks.
     static let hostKeyAlgorithms: [String] = [
+        "ssh-ed25519-cert-v01@openssh.com",
+        "ecdsa-sha2-nistp384-cert-v01@openssh.com",
+        "ecdsa-sha2-nistp256-cert-v01@openssh.com",
+        "ecdsa-sha2-nistp521-cert-v01@openssh.com",
+        "rsa-sha2-512-cert-v01@openssh.com",
+        "rsa-sha2-256-cert-v01@openssh.com",
         "ssh-ed25519",
         "ecdsa-sha2-nistp384",
         "ecdsa-sha2-nistp256",
         "ecdsa-sha2-nistp521",
+        "rsa-sha2-512",
+        "rsa-sha2-256",
     ]
 
     static var ciphers: [String] { SSHTransportProtectionCatalog.cipherNames() }

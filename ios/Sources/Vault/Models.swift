@@ -61,7 +61,13 @@ enum SSHKeyType: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Whether a key of this type can authenticate an SSH connection today.
     ///
     /// False only for RSA, and only because swift-nio-ssh cannot sign with it.
-    var canAuthenticate: Bool { self != .rsa }
+    /// Every key type this app can store can also authenticate a connection.
+    ///
+    /// This was `self != .rsa` until the swift-nio-ssh fork (#008D0) taught the
+    /// library to sign with RSA. It is kept, rather than deleted along with its
+    /// call sites, because "can this key open a connection?" is a question the
+    /// UI should keep asking of a key type rather than assuming the answer.
+    var canAuthenticate: Bool { true }
 
     /// Types offered in the in-app generator. RSA is absent deliberately:
     /// generating a key the app cannot then use would be a trap.

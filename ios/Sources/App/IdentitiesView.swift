@@ -199,11 +199,6 @@ struct IdentityRow: View {
                 if identity.syncsToICloud {
                     Label("iCloud", systemImage: "icloud").font(.caption2).foregroundStyle(.orange)
                 }
-                if !identity.keyType.canAuthenticate {
-                    Label("export only", systemImage: "exclamationmark.triangle")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
             }
         }
         .padding(.vertical, 3)
@@ -288,8 +283,9 @@ struct GenerateIdentityView: View {
             return "The private key is generated inside the Secure Enclave and can never be read out — not by this app, not by a backup, not by anyone with the device unlocked. It also cannot be exported or moved to another device."
         case .rsa:
             return """
-                RSA keys can be imported and exported but not used to connect: \
-                swift-nio-ssh cannot sign with them.
+                RSA is here for servers whose policy still requires it. Prefer Ed25519: \
+                a 4096-bit RSA key is slower to generate, slower to sign with, and no \
+                stronger in practice.
                 """
         default:
             return "NIST curve. Use it when the remote host's policy requires ECDSA."
@@ -439,13 +435,6 @@ struct ImportIdentityView: View {
             var text = "Looks like a \(detectedFormat.displayName)."
             if let parsed = try? PEMPrivateKey.parse(pem) {
                 text += " \(parsed.material.keyType.displayName)."
-                if !parsed.material.keyType.canAuthenticate {
-                    text += """
-                         It can be stored, fingerprinted and exported, but the SSH library \
-                        this app is built on cannot sign with RSA, so it cannot connect \
-                        with it yet.
-                        """
-                }
             }
             return text
         }
@@ -528,22 +517,6 @@ struct ExportIdentityView: View {
                     Text("Public key")
                 } footer: {
                     Text("Append this line to ~/.ssh/authorized_keys on the remote host.")
-                }
-                if !identity.keyType.canAuthenticate {
-                    Section {
-                        Label {
-                            Text("""
-                                This key can be stored, fingerprinted and exported, but \
-                                Ghostty cannot connect with it: swift-nio-ssh has no RSA \
-                                client key support and no way to add one from outside the \
-                                library. Use an Ed25519 key to connect.
-                                """)
-                            .font(.callout)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                        }
-                    }
                 }
                 Section {
                     ShareLink(item: identity.publicKeyLine) {

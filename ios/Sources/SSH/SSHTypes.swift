@@ -170,7 +170,6 @@ enum SSHError: Error, LocalizedError, Equatable, Sendable {
     case noAuthenticationMethods
     /// The server will only do keyboard-interactive, which NIOSSH cannot do.
     case keyboardInteractiveUnsupported
-    case rsaKeysUnsupported
     /// Client and server share no cipher, MAC, host key or key exchange
     /// algorithm. `detail` is the full explanation from ``SSHAlgorithmMismatch``
     /// once the server's own algorithm list has been read; it is nil when the
@@ -226,13 +225,6 @@ enum SSHError: Error, LocalizedError, Equatable, Sendable {
                 the server, or connect with a key instead.
                 """
 
-        case .rsaKeysUnsupported:
-            return """
-                RSA keys aren't supported. This app's SSH stack can only sign \
-                with Ed25519 and ECDSA (P-256/384/521) keys. Generate an Ed25519 \
-                key and add it to the server's authorized_keys.
-                """
-
         case .negotiationFailed(let headline, let detail):
             guard let detail, !detail.isEmpty else {
                 return """
@@ -272,7 +264,6 @@ extension SSHError {
         case .authenticationFailed: return "Authentication failed"
         case .noAuthenticationMethods: return "No credentials"
         case .keyboardInteractiveUnsupported: return "Unsupported authentication"
-        case .rsaKeysUnsupported: return "RSA keys unsupported"
         case .negotiationFailed: return "No algorithm in common"
         case .channelClosed: return "Session closed"
         case .notConnected: return "Not connected"

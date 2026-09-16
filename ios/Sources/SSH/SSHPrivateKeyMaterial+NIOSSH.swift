@@ -15,17 +15,16 @@ import NIOSSH
 extension SSHPrivateKeyMaterial {
     /// The NIOSSH representation of this key.
     ///
-    /// Throwing, and the one case that throws is RSA. `NIOSSHPrivateKey` has
-    /// five public initialisers — Ed25519, the three NIST curves, and Secure
-    /// Enclave P-256 — wrapping a private enum, with no sixth and no protocol
-    /// to conform to. The vault can hold, fingerprint and export an RSA key
-    /// (which is most of what a key manager is for) but cannot hand one to the
-    /// SSH layer, so the gap surfaces here as a sentence rather than as a
-    /// silently missing credential.
+    /// Throwing because the RSA case can: `NIOSSHPrivateKey(rsaKey:)` asks
+    /// Security.framework to re-read the key and rejects one it cannot use.
+    /// Every other case is a straight wrap.
     func nioSSHPrivateKey() throws -> NIOSSHPrivateKey {
         switch self {
-        case .rsa:
-            throw SSHError.rsaKeysUnsupported
+        case .rsa(let key):
+            // The fork signs with `rsa-sha2-512` by default. `ssh-rsa` (SHA-1)
+            // is never offered — OpenSSH has refused it since 8.8 — so a key
+            // only usable that way would fail here rather than downgrade.
+            return try NIOSSHPrivateKey(rsaKey: key.secKey, signatureAlgorithm: .sha512)
         case .ed25519(let key):
             return NIOSSHPrivateKey(ed25519Key: key)
         case .p256(let key):

@@ -32,9 +32,11 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
     private var consumed: [Bool]
     private var offeredAnything = false
     private var announcedAttempt = false
-    /// Set when a configured credential turned out to be one the SSH library
-    /// cannot use, so the give-up message can name it.
+    /// Set when a configured credential could not be turned into an offer at
+    /// all, so the give-up message can name it rather than say "auth failed".
     private var unusableKeyType: String?
+    /// Why that credential could not be used, if the key layer said.
+    private var unusableKeyReason: String?
 
     init(
         username: String,
@@ -112,9 +114,9 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
 
             self.consumed[index] = true
             guard let offer = self.makeOffer(for: method) else {
-                // The only way this happens is an RSA key, which the vault can
-                // hold but swift-nio-ssh cannot sign with. Consume it and carry
-                // on: a password on the same host should still get the user in.
+                // The stored key would not load — a damaged Keychain item, or a
+                // key Security.framework refuses. Consume it and carry on: a
+                // password on the same host should still get the user in.
                 self.unusableKeyType = method.debugLabel
                 continue
             }
@@ -127,11 +129,12 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
 
         if !self.offeredAnything {
             if let unusableKeyType = self.unusableKeyType {
+                let reason = self.unusableKeyReason.map { " (\($0))" } ?? ""
                 return .exhausted(
                     .authenticationFailed(
                         "The only credential configured for this host is an \(unusableKeyType), "
-                            + "and the SSH library this app is built on cannot sign with RSA. "
-                            + "Add an Ed25519 key, or turn on password authentication for the host."
+                            + "and it could not be loaded\(reason). Re-import the key, or turn on "
+                            + "password authentication for the host."
                     )
                 )
             }
@@ -157,8 +160,8 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
         )
     }
 
-    /// nil when the credential cannot be turned into an offer at all — today
-    /// that means only an RSA key.
+    /// nil when the credential cannot be turned into an offer at all, which
+    /// now only happens when the stored key material itself will not load.
     private func makeOffer(for method: SSHAuthMethod) -> NIOSSHUserAuthenticationOffer? {
         switch method {
         case .password(let password):
@@ -168,7 +171,12 @@ final class SSHUserAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchec
                 offer: .password(.init(password: password))
             )
         case .privateKey(let material):
-            return try? material.authenticationOffer(username: self.username)
+            do {
+                return try material.authenticationOffer(username: self.username)
+            } catch {
+                self.unusableKeyReason = (error as? LocalizedError)?.errorDescription
+                return nil
+            }
         case .none:
             return NIOSSHUserAuthenticationOffer(
                 username: self.username,

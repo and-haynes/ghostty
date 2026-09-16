@@ -140,45 +140,45 @@ struct SSHAlgorithmMismatch: Equatable {
         var notes: [String] = []
 
         if failures.contains(.hostKey) {
-            let certificateOnly = !offer.hostKeyAlgorithms.isEmpty
-                && offer.hostKeyAlgorithms.allSatisfy { Self.isCertificate($0) }
-            if certificateOnly {
+            // Ghostty verifies Ed25519, the three NIST curves, RSA (SHA-2 only)
+            // and an OpenSSH certificate over any of them, so reaching this
+            // branch means the server offers something genuinely outside that
+            // set — `ssh-dss`, or `ssh-rsa` with no SHA-2 variant alongside it.
+            let sha1RSAOnly = !offer.hostKeyAlgorithms.isEmpty
+                && offer.hostKeyAlgorithms.allSatisfy { $0 == "ssh-rsa" }
+            let dssOnly = !offer.hostKeyAlgorithms.isEmpty
+                && offer.hostKeyAlgorithms.allSatisfy { $0 == "ssh-dss" }
+
+            if sha1RSAOnly {
                 notes.append(
                     """
-                    \(hostname) only presents CA-signed host certificates. swift-nio-ssh \
-                    can parse an OpenSSH certificate but never offers a \
-                    *-cert-v01@openssh.com host key algorithm during negotiation — its \
-                    list of four is a hardcoded constant with no extension point — so the \
-                    server is never told this client would accept one.
+                    \(hostname) offers its RSA host key under ssh-rsa only, which signs \
+                    with SHA-1. Ghostty will verify an RSA host key, but only under \
+                    rsa-sha2-256 or rsa-sha2-512 — OpenSSH itself has refused SHA-1 \
+                    since 8.8, and offering to accept it would undo the point of asking \
+                    for SHA-2.
 
-                    On the server: keep a plain Ed25519 host key alongside the \
-                    certificate (OpenSSH offers both by default; something has removed \
-                    the plain HostKey line here).
+                    On the server: add rsa-sha2-512,rsa-sha2-256 to HostKeyAlgorithms \
+                    (any OpenSSH from 7.2 supports them), or add an Ed25519 host key \
+                    with ssh-keygen -A.
                     """
                 )
-            }
-            let rsaOnly = offer.hostKeyAlgorithms.allSatisfy { Self.isRSA($0) }
-            if certificateOnly {
-                // Already explained above.
-            } else if rsaOnly && !offer.hostKeyAlgorithms.isEmpty {
+            } else if dssOnly {
                 notes.append(
                     """
-                    \(hostname)'s only host keys are RSA. The SSH library this app is \
-                    built on (swift-nio-ssh 0.15) has a closed set of host key types — \
-                    Ed25519 and the three NIST curves — and no way to add RSA from \
-                    outside it, so this is not something Ghostty can work around.
+                    \(hostname)'s only host key is DSA (ssh-dss), which is 1024-bit by \
+                    definition and which OpenSSH itself removed in version 9.8. Ghostty \
+                    does not implement it.
 
-                    On the server: generate an Ed25519 host key and offer it, with \
-                    ssh-keygen -A and a HostKey /etc/ssh/ssh_host_ed25519_key line in \
-                    sshd_config. Appliances that cannot do that (older routers, some \
-                    NAS firmware) cannot be reached from this app.
+                    On the server: generate a modern host key with ssh-keygen -A and \
+                    add a HostKey /etc/ssh/ssh_host_ed25519_key line to sshd_config.
                     """
                 )
             } else {
                 notes.append(
                     """
-                    Enable an Ed25519 or ECDSA host key on \(hostname). Ghostty cannot \
-                    verify any other kind.
+                    Enable an Ed25519, ECDSA or RSA (rsa-sha2-*) host key on \(hostname). \
+                    Ghostty cannot verify any other kind.
                     """
                 )
             }
@@ -262,13 +262,7 @@ struct SSHAlgorithmMismatch: Equatable {
         !cipher.hasSuffix("-gcm@openssh.com") && cipher != "chacha20-poly1305@openssh.com"
     }
 
-    static func isRSA(_ algorithm: String) -> Bool {
-        algorithm == "ssh-rsa" || algorithm.hasPrefix("rsa-sha2-")
-            || algorithm == "ssh-rsa-cert-v01@openssh.com"
-    }
-
-    /// OpenSSH host and user certificates, which swift-nio-ssh can parse but
-    /// never negotiates.
+    /// OpenSSH host and user certificates.
     static func isCertificate(_ algorithm: String) -> Bool {
         algorithm.hasSuffix("-cert-v01@openssh.com")
     }

@@ -912,7 +912,7 @@ final class SSHSession: ObservableObject {
         case .connectionFailed, .channelClosed, .notConnected:
             return true
         case .hostKeyMismatch, .hostKeyRejectedByUser, .authenticationFailed,
-            .noAuthenticationMethods, .keyboardInteractiveUnsupported, .rsaKeysUnsupported,
+            .noAuthenticationMethods, .keyboardInteractiveUnsupported,
             .negotiationFailed:
             // An algorithm mismatch is a configuration fact, not a blip. Every
             // retry would fail identically and cost the user twenty seconds.
