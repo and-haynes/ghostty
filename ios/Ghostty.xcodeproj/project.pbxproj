@@ -605,7 +605,7 @@
 			packageReferences = (
 				BF9727F853D1E687995FE2DF /* XCRemoteSwiftPackageReference "swift-crypto" */,
 				784D32F11D3F302B09B6F872 /* XCRemoteSwiftPackageReference "swift-nio" */,
-				CA93EF35B5D5B2A650ECF495 /* XCRemoteSwiftPackageReference "swift-nio-ssh" */,
+				13A018E73F101C8E0BDACD3C /* XCRemoteSwiftPackageReference "swift-nio-ssh" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DDE1331E1E8B720EB1ED145A /* Products */;
@@ -1050,6 +1050,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		13A018E73F101C8E0BDACD3C /* XCRemoteSwiftPackageReference "swift-nio-ssh" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/and-haynes/swift-nio-ssh";
+			requirement = {
+				branch = "morton-patches";
+				kind = branch;
+			};
+		};
 		784D32F11D3F302B09B6F872 /* XCRemoteSwiftPackageReference "swift-nio" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/swift-nio";
@@ -1066,20 +1074,12 @@
 				minimumVersion = 3.0.0;
 			};
 		};
-		CA93EF35B5D5B2A650ECF495 /* XCRemoteSwiftPackageReference "swift-nio-ssh" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/apple/swift-nio-ssh";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.15.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		616CA08769B5D06837838B01 /* NIOSSH */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = CA93EF35B5D5B2A650ECF495 /* XCRemoteSwiftPackageReference "swift-nio-ssh" */;
+			package = 13A018E73F101C8E0BDACD3C /* XCRemoteSwiftPackageReference "swift-nio-ssh" */;
 			productName = NIOSSH;
 		};
 		6E667D8AB0B961C192047F6A /* NIOFoundationCompat */ = {

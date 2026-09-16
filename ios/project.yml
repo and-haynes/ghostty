@@ -27,9 +27,16 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
 packages:
+  # Andy's fork of swift-nio-ssh (#008A6, #008D0). Upstream cannot do RSA keys,
+  # SSH certificates, or any transport protection whose keys are wider than the
+  # key exchange hash, and none of it is reachable from outside the module: the
+  # key types wrap private enums and the algorithm lists are hardcoded. The
+  # morton-patches branch adds RSA via Security.framework, the RFC 4253 §7.2 key
+  # expansion, and the certificate algorithm names. A branch pin, not a version,
+  # because the fork carries no releases of its own.
   swift-nio-ssh:
-    url: https://github.com/apple/swift-nio-ssh
-    from: 0.15.0
+    url: https://github.com/and-haynes/swift-nio-ssh
+    branch: morton-patches
   swift-nio:
     url: https://github.com/apple/swift-nio
     from: 2.65.0
