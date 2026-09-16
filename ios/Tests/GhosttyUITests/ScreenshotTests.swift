@@ -447,6 +447,84 @@ final class ScreenshotTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.5)
     }
 
+    /// 16–18: SSH certificates (#008A3).
+    ///
+    /// The evidence for the certificate work: a parsed certificate on a key, the
+    /// trusted-CA list, and — the one that matters — a live session against the
+    /// loopback fixture at :22027, whose sshd has `AuthorizedKeysFile none`, so
+    /// the certificate is the only thing that can have got us in.
+    ///
+    /// Run `./Tests/local-sshd.sh start` first. Without it the session
+    /// screenshot shows the failure instead, which is still worth having.
+    func testCaptureCertificateScreenshots() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ghostty-seed"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Hosts"].waitForExistence(timeout: 30), "the app should launch")
+
+        // 16. A key with a CA certificate attached: key ID, serial, principals,
+        //     validity, extensions and the signing CA's fingerprint.
+        app.tabBars.buttons["Keys"].tap()
+        _ = app.navigationBars["Keys"].waitForExistence(timeout: 10)
+        let certifiedKey = app.staticTexts["CA-signed key"]
+        if certifiedKey.waitForExistence(timeout: 10) {
+            certifiedKey.tap()
+            Thread.sleep(forTimeInterval: 1.0)
+            app.swipeUp()
+            Thread.sleep(forTimeInterval: 0.5)
+            capture(app, named: "16-certificate")
+            if app.buttons["Done"].firstMatch.exists {
+                app.buttons["Done"].firstMatch.tap()
+            }
+        } else {
+            reportHierarchy(app, step: "certified identity")
+        }
+
+        // 17. The trusted certificate authorities, in Settings.
+        app.tabBars.buttons["Settings"].tap()
+        _ = app.navigationBars["Settings"].waitForExistence(timeout: 10)
+        app.swipeUp()
+        Thread.sleep(forTimeInterval: 0.5)
+        if app.staticTexts["SSH certificates"].waitForExistence(timeout: 5) {
+            app.staticTexts["SSH certificates"].tap()
+            Thread.sleep(forTimeInterval: 1.0)
+            capture(app, named: "17-host-certificate-ca")
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        } else {
+            reportHierarchy(app, step: "SSH certificates row")
+        }
+
+        // 18. A live certificate-authenticated session.
+        app.tabBars.buttons["Hosts"].tap()
+        _ = app.navigationBars["Hosts"].waitForExistence(timeout: 10)
+        let host = app.staticTexts["cert-demo"]
+        if host.waitForExistence(timeout: 10) {
+            host.tap()
+            // :22027 has a plain host key, so the first connection still goes
+            // through trust-on-first-use — the certificate is a *user*
+            // credential and changes nothing about host verification.
+            let prompt = app.alerts["Unknown host key"]
+            if prompt.waitForExistence(timeout: 20) {
+                prompt.buttons["Trust and connect"].firstMatch.tap()
+            }
+            // Long enough for the handshake, the certificate offer and a shell
+            // prompt to be drawn.
+            Thread.sleep(forTimeInterval: 8.0)
+            // Open the session itself: the list shows a green dot, the terminal
+            // shows the shell that dot is claiming.
+            let session = app.staticTexts["cert-demo"]
+            if session.waitForExistence(timeout: 10) {
+                session.tap()
+                Thread.sleep(forTimeInterval: 3.0)
+            }
+            capture(app, named: "18-certificate-session")
+        } else {
+            reportHierarchy(app, step: "cert-demo host")
+        }
+
+        print("ghostty-screenshots: wrote \(captured.joined(separator: ", ")) to \(outputDirectory.path)")
+    }
+
     private func focusTerminal(_ app: XCUIApplication) {
         guard app.keyboards.count == 0 else { return }
         app.children(matching: .window).element(boundBy: 0)

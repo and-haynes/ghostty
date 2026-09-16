@@ -56,9 +56,9 @@ a settings toggle.
                           │          │ Encrypted bundle        │
                           │          └─────────────────────────┘
                   ┌───────▼────────┐
-                  │ SSHSession     │  swift-nio-ssh
-                  │  pty-req/shell │  Curve25519 · P-256/384/521
-                  │  window-change │  Secure Enclave P-256
+                  │ SSHSession     │  swift-nio-ssh (morton-patches)
+                  │  pty-req/shell │  Curve25519 · P-256/384/521 · RSA
+                  │  window-change │  Secure Enclave P-256 · certificates
                   └────────────────┘
 ```
 
@@ -94,6 +94,13 @@ xcodebuild test -scheme Ghostty -project Ghostty.xcodeproj \
 
 `Frameworks/` is gitignored — the xcframework is a build artifact, not source.
 
+The SSH transport is **`and-haynes/swift-nio-ssh`, branch `morton-patches`**,
+pinned in `project.yml` as a branch dependency rather than upstream's 0.15.
+Upstream cannot do RSA keys, SSH certificates, or any cipher or MAC whose key is
+wider than the key-exchange hash, and none of it is reachable from outside the
+module — the key types wrap private enums and the algorithm lists are hardcoded.
+The section below says what the branch changes.
+
 Two build settings are load-bearing and both were learned the hard way:
 
 * **No explicit `HEADER_SEARCH_PATHS` for the xcframework.** Xcode adds the
@@ -105,7 +112,7 @@ Two build settings are load-bearing and both were learned the hard way:
 
 ## Which algorithms this app can negotiate
 
-swift-nio-ssh ships two ciphers — `aes128-gcm@openssh.com` and
+Upstream swift-nio-ssh ships two ciphers — `aes128-gcm@openssh.com` and
 `aes256-gcm@openssh.com` — and nothing else, which is fine against a modern
 OpenSSH and useless against a router, a NAS appliance or a Dropbear box. Those
 offer AES-CTR with an HMAC, share no cipher with the stock client, and fail the
@@ -113,38 +120,71 @@ handshake with `NIOSSHError.keyExchangeNegotiationFailure` and no further
 explanation.
 
 `Sources/SSH/Transport/` adds `aes256-ctr`, `aes192-ctr` and `aes128-ctr` paired
-with `hmac-sha2-256`, in both RFC 4253's MAC-then-encrypt ordering and OpenSSH's
-`-etm@openssh.com` encrypt-then-MAC one. AES-CTR comes from CommonCrypto used as
-an ECB block oracle with the counter kept in Swift; the MACs are CryptoKit. GCM
-stays first in the offer, so nothing that worked before negotiates anything
-weaker.
+with `hmac-sha2-256` and `hmac-sha2-512`, in both RFC 4253's MAC-then-encrypt
+ordering and OpenSSH's `-etm@openssh.com` encrypt-then-MAC one, and
+`chacha20-poly1305@openssh.com`. AES-CTR comes from CommonCrypto used as an ECB
+block oracle with the counter kept in Swift; the HMACs are CryptoKit; the ChaCha
+and Poly1305 are ours, against RFC 8439 vectors. GCM stays first in the offer —
+it is hardware-accelerated on every device this runs on, and nothing that worked
+yesterday should negotiate something weaker today.
 
 | | Supported |
 |---|---|
-| Key exchange | `ecdh-sha2-nistp384`, `ecdh-sha2-nistp256`, `ecdh-sha2-nistp521`, `curve25519-sha256` — swift-nio-ssh's list, which has no extension point |
-| Host keys | `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521` — likewise fixed by the library |
-| Ciphers | `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, `aes256-ctr`, `aes192-ctr`, `aes128-ctr` |
-| MACs | `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-256` (an AEAD negotiates none) |
+| Key exchange | `ecdh-sha2-nistp384`, `ecdh-sha2-nistp256`, `ecdh-sha2-nistp521`, `curve25519-sha256` — the library's list, which has no extension point |
+| Host keys | `ssh-ed25519`, `ecdsa-sha2-nistp384/256/521`, `rsa-sha2-512`, `rsa-sha2-256`, plus the six `*-cert-v01@openssh.com` equivalents — the certificate names first, and only when a CA is configured |
+| Ciphers | `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, `chacha20-poly1305@openssh.com`, `aes256-ctr`, `aes192-ctr`, `aes128-ctr` |
+| MACs | `hmac-sha2-512-etm@openssh.com`, `hmac-sha2-512`, `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-256` (an AEAD negotiates none) |
 
-**`hmac-sha2-512` and `chacha20-poly1305@openssh.com` are implemented and tested
-but not offered by default**, and the reason is a limitation worth knowing
-about. swift-nio-ssh 0.15 derives session keys by truncating a *single*
-key-exchange hash rather than running RFC 4253 §7.2's expansion loop, so it can
-never produce more key material than that hash is long: 32 bytes under
+**Why the fork.** Three of those rows used to be shorter, and the reasons were
+all upstream's. swift-nio-ssh 0.15 derived session keys by truncating a *single*
+key-exchange hash rather than running RFC 4253 §7.2's expansion loop, so it
+could never produce more key material than that hash was long: 32 bytes under
 `curve25519-sha256` and `ecdh-sha2-nistp256`, 48 under `ecdh-sha2-nistp384`, 64
-only under `ecdh-sha2-nistp521`. Both of those need a 64-byte key. Since the
-library's own first key-exchange preference is `ecdh-sha2-nistp384`, the ceiling
-against any ordinary server is 48 bytes, and offering a cipher whose key cannot
-then be derived would turn a working handshake into an assertion failure inside
-the library. They are offered only after a probe of the server confirms the
-exchange will be `ecdh-sha2-nistp521`.
+only under `ecdh-sha2-nistp521`. `hmac-sha2-512` and
+`chacha20-poly1305@openssh.com` both need a 64-byte key, so both were
+implemented, tested, and offered only after a probe confirmed the exchange would
+be `ecdh-sha2-nistp521`. chacha20-poly1305 had a second, independent blocker:
+`NIOSSHTransportProtection.decryptFirstBlock(_:)` must leave the packet length in
+plaintext and was handed no sequence number — but the sequence number *is* the
+nonce the length was encrypted under. RSA was not expressible at all:
+`NIOSSHPublicKey` and `NIOSSHPrivateKey` wrap private enums with a closed set of
+cases, and `supportedServerHostKeyAlgorithms` was a hardcoded `static let` of
+four names. And a certificate could be parsed but never negotiated, because no
+`*-cert-v01@openssh.com` name appeared in either the host key list or the list
+that gates user authentication parsing.
 
-`chacha20-poly1305@openssh.com` has a second, independent blocker:
-`NIOSSHTransportProtection.decryptFirstBlock(_:)` must leave the packet length
-in plaintext and is handed no sequence number — but the sequence number *is* the
-nonce the length was encrypted under. The protocol has no shape that cipher fits
-into. Its construction ships tested as `ChaCha20Poly1305OpenSSH`, ready for the
-day the library can host it.
+`morton-patches` fixes all four: the §7.2 expansion loop, a sequence number on
+`decryptFirstBlock`, an `.rsa` case on both key types backed by
+Security.framework, and the certificate algorithm names in both lists. So
+`hmac-sha2-512` and `chacha20-poly1305@openssh.com` are now offered on every
+connection rather than behind a probe; `hmac-sha2-512` now sits ahead of
+`hmac-sha2-256`, which it was only behind because it could not be keyed; and
+`ChaCha20Poly1305TransportProtection` wraps the vector-tested
+`ChaCha20Poly1305OpenSSH` construction as a real `NIOSSHTransportProtection`.
+
+What is still out of reach, and deliberately so in most cases:
+
+* **`ssh-rsa`** is never asked for. It signs with SHA-1, which OpenSSH has
+  refused since 8.8; only `rsa-sha2-512` and `rsa-sha2-256` are offered. A key a
+  server insists on sending under `ssh-rsa` anyway can still be verified.
+* **`ssh-dss`** is not implemented. OpenSSH removed DSA in 9.8.
+* **Finite-field Diffie-Hellman** (`diffie-hellman-group*`) is unimplemented,
+  and the fork added no key exchange algorithms, so a server old enough to offer
+  only that is still unreachable.
+* **Generating an RSA key in the app** is deliberately absent. RSA keys are
+  imported, used and exported; new ones are Ed25519 or ECDSA.
+* **Serving** a host certificate is not a thing a client does, and this is only
+  ever a client.
+
+`Tests/local-sshd.sh` (`start`, `stop`, `status`) brings up real `sshd`
+instances on loopback, and the app has run a real session over each of the new
+paths against them: an RSA-only host key, `chacha20-poly1305@openssh.com`,
+`hmac-sha2-512`, a user certificate against a server set to
+`AuthorizedKeysFile none` — where the certificate is the only way in — and a
+CA-signed host certificate, with no first-use prompt and nothing pinned. The
+negative cases run there too: a host certificate from an untrusted CA is refused
+and never falls through to trust-on-first-use, and the bare key alone is refused
+by the certificate-only server.
 
 ### When it still cannot connect
 
@@ -153,8 +193,8 @@ negotiated or authenticated. So when a handshake fails on negotiation, the app
 goes and reads it: `SSHServerProbe` takes the banner and `SSH_MSG_KEXINIT`, and
 `SSHAlgorithmMismatch` does the comparison the library threw away — which of the
 four negotiations failed, what each side offered, what is missing, and the fix.
-RSA-only host keys, finite-field Diffie-Hellman and the key-derivation ceiling
-above each get their own sentence.
+A host key offered under `ssh-rsa` alone, a DSA-only host key and finite-field
+Diffie-Hellman each get their own sentence.
 
 The same machinery is a button: **Test connection**, in the host editor. It
 reports reachability, the banner, the whole offer, what would be negotiated, and
@@ -192,6 +232,39 @@ an existing pin fails the handshake outright — there is deliberately no "accep
 anyway" button, because that button is how pinning stops meaning anything. The
 pin can be removed explicitly from **Keys ▸ Known hosts**, which is the
 supported way to handle a re-imaged box.
+
+## SSH certificates
+
+An OpenSSH certificate is a public key plus a CA's signature over a key ID, a
+serial, a list of principals, a validity window, extensions and critical
+options. It removes the two pieces of per-host bookkeeping this app otherwise
+does by hand — an `authorized_keys` line per key per host, and a pin per host.
+Both halves are supported.
+
+**User certificates** are imported next to the key they certify: **Keys ▸
+a key ▸ Certificate ▸ Import certificate**, pasting the `<key>-cert.pub` that
+`ssh-keygen -s` writes. The import screen shows the key ID, serial, principals,
+validity, extensions, critical options and the signing CA's fingerprint, and
+refuses a certificate that does not certify that key. Once attached it is
+offered automatically on every connection, *before* the bare key — and the bare
+key is still offered behind it, so attaching a certificate cannot break a host
+that admits the key through `authorized_keys` and has never heard of the CA.
+
+**Host certificates** are checked against CA public keys pasted into **Settings
+▸ SSH certificates**, one per line — the equivalent of an `@cert-authority` line
+in `known_hosts`. A host that presents a certificate is then not pinned at all:
+the certificate must be signed by one of those CAs, be a host certificate rather
+than a user one, name the host among its principals, be inside its validity
+window, and carry no critical option the app does not understand. Certificates
+are never pinned, because a certificate's fingerprint changes every time the CA
+re-signs the same host key — the routine event a short validity window exists to
+cause.
+
+The `*-cert-v01@openssh.com` host key algorithms are offered **only when a CA is
+configured**. With none, the app does not ask for a certificate at all, a
+certified host presents its plain key, and trust-on-first-use behaves exactly as
+it always did. Asking for a certificate the app has no CA to check would turn a
+working TOFU connection into a failure.
 
 ## Getting a key in from 1Password
 
@@ -349,27 +422,23 @@ nothing at all when it is off. Scrolling terminal output is deliberately silent.
 | Haptics | Off/Subtle/Normal/Rich, ~25 mapped events, CoreHaptics bell, rate-limited, silent in the background |
 | Gestures | Pinch to resize the font, pan to scroll the viewport through scrollback, long-press-and-drag to select, stationary long-press or two-finger tap for the edit menu (Copy / Paste / Select All / Select Word / Select Input / Select Output) |
 | Paste | Bracketed-paste aware, unsafe-paste confirmation |
-| SSH | Connect, host key verification, `pty-req` (configurable TERM), `env`, `shell` or `exec`, `window-change`, clean disconnect, bounded reconnect with backoff |
-| Ciphers | `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, and `aes256/192/128-ctr` with `hmac-sha2-256` in both the plain and `-etm@openssh.com` orderings — so servers with no AEAD (routers, NAS boxes, Dropbear) are reachable |
+| SSH | Connect, host key verification (pinned trust-on-first-use, or a CA-signed host certificate), `pty-req` (configurable TERM), `env`, `shell` or `exec`, `window-change`, clean disconnect, bounded reconnect with backoff |
+| Ciphers | `aes256-gcm@openssh.com`, `aes128-gcm@openssh.com`, `chacha20-poly1305@openssh.com`, and `aes256/192/128-ctr` with `hmac-sha2-512` or `hmac-sha2-256` in both the plain and `-etm@openssh.com` orderings — so servers with no AEAD (routers, NAS boxes, Dropbear) are reachable |
 | Diagnostics | **Test connection** in the host editor: banner, the server's whole algorithm list, what would be negotiated, the host key fingerprint, and whether the credentials work — without opening a shell. A failed negotiation explains itself in plain language instead of `keyExchangeNegotiationFailure` |
-| Auth | Password (stored or prompted), public key: Ed25519, ECDSA P-256/384/521, **Secure Enclave P-256** |
-| Keys | Generate in-app; import unencrypted OpenSSH, PKCS#8, PKCS#1 RSA and SEC 1 EC keys from the clipboard, a paste or Files; export/copy/share the public line, delete with confirmation, SHA256 fingerprints |
+| Auth | Password (stored or prompted), public key: Ed25519, ECDSA P-256/384/521, RSA (`rsa-sha2-512`/`rsa-sha2-256`), **Secure Enclave P-256**, and an OpenSSH certificate attached to any of them |
+| Keys | Generate in-app (Ed25519, ECDSA, Secure Enclave — not RSA); import unencrypted OpenSSH, PKCS#8, PKCS#1 RSA and SEC 1 EC keys from the clipboard, a paste or Files; export/copy/share the public line, delete with confirmation, SHA256 fingerprints |
+| Certificates | Import a user certificate beside its key, with key ID, serial, principals, validity, extensions, critical options and the CA's fingerprint shown before import, offered ahead of the bare key; CA public keys in Settings, against which a host certificate is checked for signature, type, principal, validity and critical options instead of being pinned |
 | 1Password | One-tap **Import key from clipboard** when the clipboard holds a key, an in-app guide for getting one out of 1Password, and the clipboard wiped once the key is in the Keychain |
 | Vault | Hosts with alias/group/tags/colour/TERM/font size/startup command/notes, known-hosts list with forget |
-| Tests | 321 unit tests (including NIST, RFC 4231 and RFC 8439 crypto vectors, key-format fixtures from `ssh-keygen`/`openssl`, and integration tests against a real `sshd`) + UI tests that drive the real app and capture the screenshots below |
+| Tests | 362 unit tests (including NIST, RFC 4231 and RFC 8439 crypto vectors, key-format and certificate fixtures from `ssh-keygen`/`openssl`, and integration tests against the real `sshd` instances `Tests/local-sshd.sh` starts) + UI tests that drive the real app and capture the screenshots below |
 
 ### Partial
 
-* **RSA keys are held, not used.** An RSA key can be imported from any of the
-  four encodings, stored in the Keychain, fingerprinted and exported as an
-  `authorized_keys` line — which is most of what a key manager is for — but it
-  cannot authenticate a connection, and an RSA host key cannot be verified.
-  That is not a gap in this app: swift-nio-ssh 0.15's `NIOSSHPublicKey` and
-  `NIOSSHPrivateKey` wrap private enums with a closed set of cases, there is no
-  protocol to conform to, and `supportedServerHostKeyAlgorithms` is a hardcoded
-  `static let` of four names. Adding RSA needs a patched or vendored copy of the
-  library. The app says so on the key rather than refusing the import.
-
+* **RSA keys can only be imported, not generated.** An RSA key imported from
+  any of the four encodings authenticates a connection, and an RSA host key is
+  verified, both under `rsa-sha2-512` or `rsa-sha2-256`. What the app will not
+  do is make a *new* RSA key: the types it generates are Ed25519, ECDSA and
+  Secure Enclave P-256.
 * **Mouse reporting** — the encoder is wired (`VTMouseEncoder`, synced from
   terminal state) but no gesture currently forwards events to it, so programs
   that turn on mouse tracking see nothing. The seam is there; the gesture
@@ -430,6 +499,10 @@ on an iPhone 17 simulator.
 | The edit menu on a stationary long press — Paste, Select All, Select Word, and the input/output selections behind the chevron | The session status line above the key bar, which is the sole occupant of the row above the keyboard |
 | ![Clipboard import](docs/screenshots/15-clipboard-import.png) | ![Clipboard offer](docs/screenshots/15-clipboard-import-offer.png) |
 | A key pasted from the clipboard: format recognised, name prefilled, one tap from 1Password | The Keys tab offering the import when the clipboard holds something |
+| ![Certificate](docs/screenshots/16-certificate.png) | ![Host certificate authorities](docs/screenshots/17-host-certificate-ca.png) |
+| A CA certificate attached to a key: key ID, serial, principals, validity, extensions and the signing CA's fingerprint | The trusted host certificate authorities, parsed and fingerprinted as they are typed |
+| ![Certificate session](docs/screenshots/18-certificate-session.png) | |
+| A shell opened by certificate alone. The server is `Tests/local-sshd.sh`'s `:22027`, which has `AuthorizedKeysFile none` — the key itself is unknown to it, and its log records `Accepted publickey ... ED25519-CERT ... ID ghostty-integration (serial 4242)`. | |
 
 ## Toolchain
 
@@ -440,7 +513,7 @@ on an iPhone 17 simulator.
 | Deployment target | iOS 17.0, iPhone + iPad |
 | zig (for libghostty-vt) | 0.16.0 |
 | xcodegen | 2.46.0 |
-| swift-nio-ssh | 0.15.0 |
+| swift-nio-ssh | `and-haynes/swift-nio-ssh`, branch `morton-patches` (a fork of 0.15.0) |
 | swift-nio | 2.102.0 |
 | swift-crypto | 3.15.1 |
 | Bundle id | `com.morton.ghostty` |
@@ -455,7 +528,7 @@ ios/
 │   ├── GhosttyVT/              Swift wrapper over the libghostty-vt C API
 │   ├── TerminalView/           UIKit CoreText grid, key bar, selection helper
 │   ├── Console/                the app's own command line
-│   ├── SSH/                    swift-nio-ssh client, TOFU, auth
+│   ├── SSH/                    swift-nio-ssh client, TOFU, certificates, auth
 │   ├── Vault/                  identities, hosts, known hosts, Keychain
 │   ├── Sync/                   sync engine + iCloud/Bitwarden/1Password/bundle
 │   ├── Haptics/                the haptics service
@@ -463,7 +536,8 @@ ios/
 │   └── App/                    SwiftUI screens
 └── Tests/
     ├── GhosttyTests/           unit tests (VT, key encoding, vault, TOFU)
-    └── GhosttyUITests/         drives the app, captures the screenshots
+    ├── GhosttyUITests/         drives the app, captures the screenshots
+    └── local-sshd.sh           real sshd instances on loopback to test against
 ```
 
 ### Testing against a real Vaultwarden

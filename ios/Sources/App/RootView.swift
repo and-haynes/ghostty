@@ -36,7 +36,7 @@ struct RootView: View {
         }
         .onAppear {
             sessions.configure(vault: vault, settings: settings)
-            ScreenshotSeed.apply(to: vault)
+            ScreenshotSeed.apply(to: vault, settings: settings)
         }
         // Connecting — from the hosts list or from `ssh` in the console —
         // should put you where the session is, not leave you looking at the
