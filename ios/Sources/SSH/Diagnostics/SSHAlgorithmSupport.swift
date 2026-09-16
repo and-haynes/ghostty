@@ -10,8 +10,13 @@ import NIOSSH
 /// apart from what the code does.
 enum SSHAlgorithmSupport {
     /// swift-nio-ssh's key exchange preference order, and the digest each one
-    /// hashes to. The digest size is the ceiling on every session key the
-    /// library can derive — see ``SSHTransportProtectionCatalog``.
+    /// hashes to.
+    ///
+    /// The digest size used to be a hard ceiling on session key material,
+    /// because the library truncated one hash rather than expanding it. It no
+    /// longer is (#008D0), but the sizes are still what the diagnostics report
+    /// and what `SSHTransportProtectionCatalog.schemes(keyExchangeHashBytes:)`
+    /// would consult if a future scheme needed more than an exchange can give.
     static let keyExchange: [(name: String, hashBytes: Int)] = [
         ("ecdh-sha2-nistp384", 48),
         ("ecdh-sha2-nistp256", 32),
@@ -73,16 +78,6 @@ enum SSHAlgorithmSupport {
 
     static var ciphers: [String] { SSHTransportProtectionCatalog.cipherNames() }
     static var macs: [String] { SSHTransportProtectionCatalog.macNames() }
-
-    /// Ciphers and MACs that are implemented but can only be offered when the
-    /// negotiated key exchange hashes to 64 bytes.
-    static var longKeyCiphers: [String] {
-        SSHTransportProtectionCatalog.cipherNames(SSHTransportProtectionCatalog.longKeySchemes)
-    }
-
-    static var longKeyMACs: [String] {
-        SSHTransportProtectionCatalog.macNames(SSHTransportProtectionCatalog.longKeySchemes)
-    }
 
     /// The key exchange that would be chosen against this server, and the
     /// number of bytes of key material it can produce.

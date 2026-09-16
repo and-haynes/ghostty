@@ -221,50 +221,25 @@ struct SSHAlgorithmMismatch: Equatable {
         }
 
         if failures.contains(.cipher) {
-            let longKeyOnly = offer.ciphers.allSatisfy {
-                SSHAlgorithmSupport.longKeyCiphers.contains($0)
-                    || $0 == "chacha20-poly1305@openssh.com"
-            }
-            if longKeyOnly && !offer.ciphers.isEmpty {
-                notes.append(Self.longKeyNote)
-            } else {
-                notes.append(
-                    """
-                    Add aes256-ctr (or an aes*-gcm@openssh.com mode) to \(hostname)'s \
-                    Ciphers.
-                    """
-                )
-            }
+            notes.append(
+                """
+                Add aes256-ctr (or an aes*-gcm@openssh.com or \
+                chacha20-poly1305@openssh.com mode) to \(hostname)'s Ciphers.
+                """
+            )
         }
 
         if failures.contains(.mac) {
-            let sha512Only = offer.macs.allSatisfy { $0.hasPrefix("hmac-sha2-512") }
-            if sha512Only && !offer.macs.isEmpty {
-                notes.append(Self.longKeyNote)
-            } else {
-                notes.append(
-                    """
-                    Add hmac-sha2-256-etm@openssh.com (or hmac-sha2-256) to \
-                    \(hostname)'s MACs.
-                    """
-                )
-            }
+            notes.append(
+                """
+                Add hmac-sha2-256-etm@openssh.com (or hmac-sha2-256, or \
+                hmac-sha2-512) to \(hostname)'s MACs.
+                """
+            )
         }
 
         return notes
     }
-
-    /// The one explanation nobody would guess: implemented, tested, and still
-    /// unusable because of how the library derives keys.
-    private static let longKeyNote = """
-        The only algorithms this server will accept need a 64-byte session key. \
-        Ghostty implements them, but swift-nio-ssh 0.15 derives session keys by \
-        truncating a single key-exchange hash rather than expanding it, so it can \
-        only produce 64 bytes when the key exchange is ecdh-sha2-nistp521 — and \
-        this server did not offer that. Adding ecdh-sha2-nistp521 to the server's \
-        KexAlgorithms, or adding aes256-ctr with hmac-sha2-256, fixes it from the \
-        server side.
-        """
 
     // MARK: - Helpers
 
