@@ -430,7 +430,7 @@ nothing at all when it is off. Scrolling terminal output is deliberately silent.
 | Certificates | Import a user certificate beside its key, with key ID, serial, principals, validity, extensions, critical options and the CA's fingerprint shown before import, offered ahead of the bare key; CA public keys in Settings, against which a host certificate is checked for signature, type, principal, validity and critical options instead of being pinned |
 | 1Password | One-tap **Import key from clipboard** when the clipboard holds a key, an in-app guide for getting one out of 1Password, and the clipboard wiped once the key is in the Keychain |
 | Vault | Hosts with alias/group/tags/colour/TERM/font size/startup command/notes, known-hosts list with forget |
-| Tests | 362 unit tests (including NIST, RFC 4231 and RFC 8439 crypto vectors, key-format and certificate fixtures from `ssh-keygen`/`openssl`, and integration tests against the real `sshd` instances `Tests/local-sshd.sh` starts) + UI tests that drive the real app and capture the screenshots below |
+| Tests | 364 unit tests (including NIST, RFC 4231 and RFC 8439 crypto vectors, key-format and certificate fixtures from `ssh-keygen`/`openssl`, and integration tests against the real `sshd` instances `Tests/local-sshd.sh` starts) + UI tests that drive the real app and capture the screenshots below |
 
 ### Partial
 

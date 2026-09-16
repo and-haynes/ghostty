@@ -120,8 +120,17 @@ struct ConnectionTestView: View {
                 algorithmList("Key exchange", offer.keyExchangeAlgorithms)
                 algorithmList("MACs", offer.macs)
             }
-            Section("What Ghostty supports") {
-                algorithmList("Host keys", SSHAlgorithmSupport.hostKeyAlgorithms)
+            Section("What Ghostty offers") {
+                // What it *offers*, not everything it could verify: the
+                // certificate algorithms are only named when a CA is
+                // configured, and a sheet that listed them anyway would be
+                // diagnosing a negotiation the app will never attempt.
+                algorithmList(
+                    "Host keys",
+                    SSHAlgorithmSupport.offeredHostKeyAlgorithms(
+                        trustingCertificateAuthorities: !settings.trustedAuthorities.isEmpty
+                    )
+                )
                 algorithmList("Ciphers", SSHAlgorithmSupport.ciphers)
                 algorithmList("Key exchange", SSHAlgorithmSupport.keyExchangeAlgorithms)
                 algorithmList("MACs", SSHAlgorithmSupport.macs)

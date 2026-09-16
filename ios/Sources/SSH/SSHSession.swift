@@ -489,6 +489,9 @@ final class SSHSession: ObservableObject {
             let widened = SSHAlgorithmMismatch(
                 hostname: request.hostname,
                 offer: offer,
+                supportedHostKeys: SSHAlgorithmSupport.offeredHostKeyAlgorithms(
+                    trustingCertificateAuthorities: !self.trustedHostAuthorities.isEmpty
+                ),
                 supportedCiphers: SSHTransportProtectionCatalog.cipherNames(extended),
                 supportedMACs: SSHTransportProtectionCatalog.macNames(extended)
             )
@@ -503,7 +506,13 @@ final class SSHSession: ObservableObject {
             }
         }
 
-        let mismatch = SSHAlgorithmMismatch(hostname: request.hostname, offer: offer)
+        let mismatch = SSHAlgorithmMismatch(
+            hostname: request.hostname,
+            offer: offer,
+            supportedHostKeys: SSHAlgorithmSupport.offeredHostKeyAlgorithms(
+                trustingCertificateAuthorities: !self.trustedHostAuthorities.isEmpty
+            )
+        )
         let explained = SSHError.negotiationFailed(
             headline: mismatch.summary,
             detail: mismatch.explanation

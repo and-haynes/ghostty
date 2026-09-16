@@ -39,7 +39,11 @@ struct SSHAlgorithmMismatch: Equatable {
         hostname: String,
         offer: SSHServerOffer,
         supportedKeyExchange: [String] = SSHAlgorithmSupport.keyExchangeAlgorithms,
-        supportedHostKeys: [String] = SSHAlgorithmSupport.hostKeyAlgorithms,
+        // What a client with *no* certificate authority configured offers,
+        // which is the conservative answer and the common case. A caller that
+        // has a CA passes the wider list — otherwise this would report a
+        // certificate-only server as negotiable when it is not.
+        supportedHostKeys: [String] = SSHAlgorithmSupport.plainHostKeyAlgorithms,
         supportedCiphers: [String] = SSHAlgorithmSupport.ciphers,
         supportedMACs: [String] = SSHAlgorithmSupport.macs
     ) {

@@ -167,7 +167,13 @@ enum SSHConnectionTester {
         }
         report.offer = offer
 
-        let mismatch = SSHAlgorithmMismatch(hostname: request.hostname, offer: offer)
+        let mismatch = SSHAlgorithmMismatch(
+            hostname: request.hostname,
+            offer: offer,
+            supportedHostKeys: SSHAlgorithmSupport.offeredHostKeyAlgorithms(
+                trustingCertificateAuthorities: !trustedHostAuthorities.isEmpty
+            )
+        )
         report.mismatch = mismatch
         report.negotiatedKeyExchange = mismatch.keyExchangeInCommon.first
         report.negotiatedHostKeyAlgorithm = mismatch.hostKeysInCommon.first
