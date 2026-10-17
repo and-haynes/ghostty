@@ -309,6 +309,15 @@ final class BigUnsignedIntegerTests: XCTestCase {
 /// 1Password, through the clipboard, into the vault (#008A1).
 @MainActor
 final class ClipboardKeyImportTests: XCTestCase {
+    private final class InMemoryPasteboard: KeyImportPasteboard {
+        var string: String?
+        var items: [[String: Any]] = [] {
+            didSet { if items.isEmpty { string = nil } }
+        }
+        var hasStrings: Bool { !(string ?? "").isEmpty }
+    }
+    private let pasteboard = InMemoryPasteboard()
+
     private func makeVault() -> Vault {
         Vault(
             keychain: InMemoryKeychain(),
@@ -317,16 +326,11 @@ final class ClipboardKeyImportTests: XCTestCase {
         )
     }
 
-    override func tearDown() {
-        UIPasteboard.general.items = []
-        super.tearDown()
-    }
-
     func testReadsAKeyOffTheClipboardAndSuggestsItsComment() {
-        UIPasteboard.general.string = KeyFormatFixtures.openSSHRSA
-        XCTAssertTrue(ClipboardKeyImport.mayHaveKey)
+        pasteboard.string = KeyFormatFixtures.openSSHRSA
+        XCTAssertTrue(ClipboardKeyImport.mayHaveKey(in: pasteboard))
 
-        guard case .key(let text, let format, let suggested) = ClipboardKeyImport.read() else {
+        guard case .key(let text, let format, let suggested) = ClipboardKeyImport.read(from: pasteboard) else {
             return XCTFail("expected a key")
         }
         XCTAssertEqual(format, .openSSHV1)
@@ -337,8 +341,8 @@ final class ClipboardKeyImportTests: XCTestCase {
     /// PKCS#8 — what 1Password actually hands out — carries no comment, so the
     /// suggestion has to be a placeholder rather than an empty field.
     func testSuggestsAPlaceholderNameForAnAnonymousFormat() {
-        UIPasteboard.general.string = KeyFormatFixtures.rsaPKCS8
-        guard case .key(_, let format, let suggested) = ClipboardKeyImport.read() else {
+        pasteboard.string = KeyFormatFixtures.rsaPKCS8
+        guard case .key(_, let format, let suggested) = ClipboardKeyImport.read(from: pasteboard) else {
             return XCTFail("expected a key")
         }
         XCTAssertEqual(format, .pkcs8)
@@ -346,38 +350,38 @@ final class ClipboardKeyImportTests: XCTestCase {
     }
 
     func testDistinguishesEncryptedAndNonKeyClipboards() {
-        UIPasteboard.general.string = KeyFormatFixtures.encryptedPKCS8
-        guard case .encryptedKey = ClipboardKeyImport.read() else {
+        pasteboard.string = KeyFormatFixtures.encryptedPKCS8
+        guard case .encryptedKey = ClipboardKeyImport.read(from: pasteboard) else {
             return XCTFail("an encrypted key must be reported as such, not as a key")
         }
 
-        UIPasteboard.general.string = "https://example.com/not-a-key"
-        guard case .notAKey = ClipboardKeyImport.read() else {
+        pasteboard.string = "https://example.com/not-a-key"
+        guard case .notAKey = ClipboardKeyImport.read(from: pasteboard) else {
             return XCTFail("a URL is not a key")
         }
 
-        UIPasteboard.general.items = []
-        guard case .empty = ClipboardKeyImport.read() else {
+        pasteboard.items = []
+        guard case .empty = ClipboardKeyImport.read(from: pasteboard) else {
             return XCTFail("an empty clipboard is empty")
         }
-        XCTAssertFalse(ClipboardKeyImport.mayHaveKey)
+        XCTAssertFalse(ClipboardKeyImport.mayHaveKey(in: pasteboard))
     }
 
     /// A public key on the clipboard is the most likely wrong thing to copy,
     /// and it must not look like a private one.
     func testAPublicKeyIsNotOfferedForImport() {
-        UIPasteboard.general.string = KeyFormatFixtures.openSSHRSAPublicLine
-        guard case .notAKey = ClipboardKeyImport.read() else {
+        pasteboard.string = KeyFormatFixtures.openSSHRSAPublicLine
+        guard case .notAKey = ClipboardKeyImport.read(from: pasteboard) else {
             return XCTFail("a public key line is not a private key")
         }
     }
 
     func testClearingTheClipboardLeavesNothingBehind() {
-        UIPasteboard.general.string = KeyFormatFixtures.rsaPKCS8
-        XCTAssertTrue(ClipboardKeyImport.mayHaveKey)
-        ClipboardKeyImport.clear()
-        XCTAssertFalse(ClipboardKeyImport.mayHaveKey)
-        XCTAssertNil(UIPasteboard.general.string)
+        pasteboard.string = KeyFormatFixtures.rsaPKCS8
+        XCTAssertTrue(ClipboardKeyImport.mayHaveKey(in: pasteboard))
+        ClipboardKeyImport.clear(using: pasteboard)
+        XCTAssertFalse(ClipboardKeyImport.mayHaveKey(in: pasteboard))
+        XCTAssertNil(pasteboard.string)
     }
 
     /// Every format the clipboard path accepts must reach the vault, keep its
@@ -415,5 +419,21 @@ final class ClipboardKeyImportTests: XCTestCase {
             SSHKeyType.generatable.contains(.rsa),
             "generating a key the app cannot use would be a trap"
         )
+    }
+}
+
+/// Explicit integration smoke only: the simulator daemon is asynchronous and
+/// host-shared, so it must not determine the default unit-suite result.
+@MainActor
+final class ClipboardKeyImportSystemSmokeTests: XCTestCase {
+    func testRealPasteboardReadAndClear() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["GHOSTTY_REAL_PASTEBOARD_TESTS"] == "1",
+                          "Opt in with GHOSTTY_REAL_PASTEBOARD_TESTS=1 on a dedicated simulator")
+        UIPasteboard.general.string = "ghostty clipboard smoke \(UUID().uuidString)"
+        defer { ClipboardKeyImport.clear() }
+        XCTAssertTrue(ClipboardKeyImport.mayHaveKey)
+        guard case .notAKey = ClipboardKeyImport.read() else { return XCTFail("expected smoke text") }
+        ClipboardKeyImport.clear()
+        XCTAssertFalse(ClipboardKeyImport.mayHaveKey)
     }
 }

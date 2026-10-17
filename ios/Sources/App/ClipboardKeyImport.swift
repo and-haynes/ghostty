@@ -1,6 +1,17 @@
 import SwiftUI
 import UIKit
 
+/// The small surface needed by clipboard import; tests avoid the simulator's
+/// asynchronous, host-shared general pasteboard (#008D3).
+@MainActor
+protocol KeyImportPasteboard: AnyObject {
+    var hasStrings: Bool { get }
+    var string: String? { get set }
+    var items: [[String: Any]] { get set }
+}
+
+extension UIPasteboard: KeyImportPasteboard {}
+
 /// Getting a key out of 1Password and into this app.
 ///
 /// 1Password has no on-device API a third-party iOS app may call — no
@@ -28,7 +39,11 @@ enum ClipboardKeyImport {
     /// shopping list without reading the clipboard, and reading it is the thing
     /// we are avoiding until the user asks.
     static var mayHaveKey: Bool {
-        UIPasteboard.general.hasStrings
+        mayHaveKey(in: UIPasteboard.general)
+    }
+
+    static func mayHaveKey(in pasteboard: any KeyImportPasteboard) -> Bool {
+        pasteboard.hasStrings
     }
 
     /// What the clipboard turned out to hold.
@@ -59,13 +74,13 @@ enum ClipboardKeyImport {
     /// the user opens next, and on a Mac signed into the same iCloud account
     /// through Universal Clipboard. Clearing it is the least we can do, and the
     /// user has just told us they are finished with it.
-    static func clear() {
+    static func clear(using pasteboard: any KeyImportPasteboard = UIPasteboard.general) {
         // Both, deliberately. Emptying `items` is the documented way, but a
         // pasteboard that has been through Universal Clipboard can be left with
         // a promised representation that `items = []` alone does not settle;
         // writing an empty string first guarantees `hasStrings` goes false.
-        UIPasteboard.general.string = ""
-        UIPasteboard.general.items = []
+        pasteboard.string = ""
+        pasteboard.items = []
     }
 
     /// Read and classify the clipboard directly.
@@ -73,8 +88,8 @@ enum ClipboardKeyImport {
     /// Raises the system's "Allow Paste?" alert and returns nil until the user
     /// has allowed it, so this is the fallback path for the plain button —
     /// ``PasteKeyControl`` is the one that works first time.
-    static func read() -> Contents {
-        guard let text = UIPasteboard.general.string else { return .empty }
+    static func read(from pasteboard: any KeyImportPasteboard = UIPasteboard.general) -> Contents {
+        guard let text = pasteboard.string else { return .empty }
         return Self.classify(text)
     }
 

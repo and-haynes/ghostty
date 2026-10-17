@@ -564,3 +564,24 @@ real-world shape of the KDF response used in the test fixtures. There is **no
 account available to this repo**, so the Bitwarden crypto is tested against
 published test vectors and recorded `prelogin` / `sync` fixtures rather than a
 live login. Nothing in the test suite touches the network.
+
+### Clipboard import tests
+
+`ClipboardKeyImportTests` use an in-memory pasteboard with synthetic key fixtures,
+so the simulator's asynchronous, host-shared pasteboard does not decide the unit
+gate. The app still uses `UIPasteboard.general` by default.
+
+The separate system-pasteboard smoke test is opt-in on a dedicated simulator; it
+writes and clears harmless test text. Run it explicitly when qualifying the
+platform integration:
+
+```bash
+TEST_RUNNER_GHOSTTY_REAL_PASTEBOARD_TESTS=1 xcodebuild test \
+  -scheme Ghostty -project Ghostty.xcodeproj \
+  -destination 'platform=iOS Simulator,name=<dedicated simulator>' \
+  -parallel-testing-enabled NO \
+  -only-testing:GhosttyTests/ClipboardKeyImportSystemSmokeTests
+```
+
+Without that opt-in, the smoke test reports an explicit skip. The deterministic
+classification, clearing and in-memory-vault import checks still run normally.
